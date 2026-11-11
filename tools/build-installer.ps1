@@ -17,7 +17,8 @@ if (-not $NsisCompiler) {
     $nsisArchive = Join-Path $cache 'nsis-3.13.zip'
     $NsisCompiler = Join-Path $cache 'nsis-3.13\makensis.exe'
     if (-not (Test-Path -LiteralPath $NsisCompiler)) {
-        Invoke-WebRequest 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13.zip' -OutFile $nsisArchive -UseBasicParsing
+        # SourceForge serves an HTML countdown page to browser-like clients; a command-line user agent gets the file itself.
+        Invoke-WebRequest 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13.zip' -OutFile $nsisArchive -UseBasicParsing -UserAgent 'Wget/1.21.4'
         if ((Get-FileHash -LiteralPath $nsisArchive -Algorithm SHA256).Hash -ne 'BA63DFFC4410EE89193E1CB5A41989991BD77C61068DA17E3156D136B7B0B3D8') { throw 'NSIS archive checksum mismatch' }
         Expand-Archive -LiteralPath $nsisArchive -DestinationPath $cache -Force
     }
