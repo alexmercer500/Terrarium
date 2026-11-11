@@ -1049,18 +1049,35 @@ function makeSchool(onScreen) {
   const S = SPECIES[sp], at = findWater(onScreen);
   if (at.s < 15) return null;                                // no open water to swim in (desktop full of icons)
   const n = Math.round(rand(S.n[0], S.n[1]));
+  // Formation: a loose staggered lattice, like a real polarized school. Fish keep ~1.3 body lengths
+  // nose-to-tail and ~1 body length side to side, so they never pile up into a clump.
+  const Lm = (S.len[0] + S.len[1]) / 2;
+  const cols = Math.max(2, Math.round(Math.sqrt(n * 0.55)));
+  const along = Lm * 1.35, across = Lm * 1.0;
   const fish = [];
   for (let i = 0; i < n; i++) {
-    const tri = (Math.random() + Math.random()) - 1;
-    fish.push({ d: 6 + Math.random() * S.spread * 2.8, l: tri * S.spread * 0.9, ph: Math.random() * 6.283,
-      len: rand(S.len[0], S.len[1]), sw: Math.random() * 6.283, x: at.x, y: at.y, c: 1, s: 0 });
+    const row = Math.floor(i / cols), col = i % cols;
+    const inRow = Math.min(cols, n - row * cols);                  // the last row may be shorter: keep it centred
+    const l = (col - (inRow - 1) / 2 + (row % 2 ? 0.25 : -0.25)) * across;   // alternate rows shifted half a slot
+    const len = rand(S.len[0], S.len[1]);
+    fish.push({
+      d: 8 + row * along + rand(-0.25, 0.25) * along,               // distance behind the leader along the trail
+      l: l + rand(-0.28, 0.28) * across,                            // sideways offset from the trail
+      ad: len * rand(0.10, 0.18), wd: rand(0.35, 0.6),              // gentle surge forward/back
+      al: len * rand(0.08, 0.15), wl: rand(0.25, 0.45),             // gentle sideways drift
+      ph: Math.random() * 6.283, ph2: Math.random() * 6.283,
+      len, sw: Math.random() * 6.283, x: at.x, y: at.y, c: Math.cos(at.ang), s: Math.sin(at.ang) });
   }
+  const depth = 8 + Math.ceil(n / cols) * along + Lm;
   const sc = { sp, x: at.x, y: at.y, ang: at.ang, base: at.ang, p1: Math.random() * 99, p2: Math.random() * 99,
     path: [], fish, alpha: onScreen ? 0 : 1, dying: false, stuck: 0, speed: 26 * S.spd * rand(0.9, 1.1) };
   // pre-fill a straight trail behind the leader
-  const need = Math.ceil((S.spread * 2.8 + 12) / PSTEP) + 3;
+  const need = Math.ceil((depth + 12) / PSTEP) + 4;
   for (let i = 0; i < need; i++) sc.path.push([at.x - Math.cos(at.ang) * i * PSTEP, at.y - Math.sin(at.ang) * i * PSTEP]);
   sc.maxPath = need;
+  // start every fish in its formation slot (not all on the spawn point)
+  const cx = Math.cos(at.ang), cy = Math.sin(at.ang);
+  for (const f of fish) { f.x = at.x - cx * f.d - cy * f.l; f.y = at.y - cy * f.d + cx * f.l; }
   return sc;
 }
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
@@ -1130,21 +1147,27 @@ function stepSchools(dt) {
       continue;
     }
     // place each fish on the trail
-    const t = simT;
+    const t = simT, last = sc.path.length - 2.001;
+    const vSwim = Math.max(sc.speed * P.flow, 1e-3);
     for (const f of sc.fish) {
-      const d = Math.max(0, f.d + 4 * Math.sin(t * 0.6 + f.ph));
-      const k = Math.min(d / PSTEP, sc.path.length - 2.001), i0 = Math.floor(k), u = k - i0;
+      const d = Math.max(0, f.d + f.ad * Math.sin(t * f.wd + f.ph));
+      const k = Math.min(d / PSTEP, last), i0 = Math.floor(k), u = k - i0;
       const a = sc.path[i0], b = sc.path[i0 + 1];
       const px = a[0] + (b[0] - a[0]) * u, py = a[1] + (b[1] - a[1]) * u;
-      let tx = a[0] - b[0], ty = a[1] - b[1]; const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
-      const lat = f.l * (0.85 + 0.15 * Math.sin(t * 0.4 + f.ph)) + 2.5 * Math.sin(t * 1.3 + f.ph * 2);
-      const nx = px - ty * lat, ny = py + tx * lat;
-      // heading from actual motion, smoothed
-      const mx = nx - f.x, my = ny - f.y, ml = Math.hypot(mx, my);
-      if (ml > 0.01) { f.c = f.c * 0.85 + (mx / ml) * 0.15; f.s = f.s * 0.85 + (my / ml) * 0.15; }
-      else { f.c = f.c * 0.9 + tx * 0.1; f.s = f.s * 0.9 + ty * 0.1; }
-      f.x = nx; f.y = ny;
-      f.sw += dt * (6 + 9 * P.flow) * (0.8 + 0.4 * Math.sin(f.ph));
+      // swimming direction = trail tangent, measured over a few steps so tight turns don't make it jitter
+      const fa = sc.path[Math.max(0, i0 - 2)], fb = sc.path[Math.min(sc.path.length - 1, i0 + 3)];
+      let tx = fa[0] - fb[0], ty = fa[1] - fb[1]; const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
+      const lat = f.l + f.al * Math.sin(t * f.wl + f.ph2);
+      f.x = px - ty * lat; f.y = py + tx * lat;
+      // facing: along the school's heading, angled slightly while drifting sideways (never sideways or backwards)
+      const latRate = f.al * f.wl * Math.cos(t * f.wl + f.ph2);                // px/s sideways
+      const yaw = Math.max(-0.3, Math.min(0.3, Math.atan2(latRate, vSwim)));
+      const cy = Math.cos(yaw), sy = Math.sin(yaw);
+      const hx = tx * cy - ty * sy, hy = tx * sy + ty * cy;
+      const ease = Math.min(1, dt * 6);                                         // light smoothing, no lag
+      f.c += (hx - f.c) * ease; f.s += (hy - f.s) * ease;
+      // tail beat follows the swimming speed (slower fish beat slower)
+      f.sw += dt * (5 + 7 * P.flow) * (0.85 + 0.3 * Math.sin(f.ph));
     }
   }
 }
