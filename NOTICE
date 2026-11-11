@@ -1,4 +1,9 @@
-Copyright (C) 2026 Deskland authors.
+Terrarium
+Copyright (C) 2026 Terrarium contributors.
+
+Terrarium is a modified version of Deskland Preview
+(https://github.com/BLEZZ0102/Deskland), Copyright (C) 2026 Deskland authors.
+It is not affiliated with or endorsed by the Deskland project.
 
 Project source code and included theme assets are licensed under GNU GPL version 3.
 Third-party dependencies retain their own licenses. See LICENSE, THIRD_PARTY_NOTICES.md and TRADEMARKS.md.

@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Deskland Preview</title>
+<title>Terrarium</title>
 <!--
-  Deskland 设置窗口
-  - 由桌面宿主（host/Deskland.exe）在 WebView2 里打开；单独用浏览器打开时使用模拟数据，方便调界面
+  Terrarium 设置窗口
+  - 由桌面宿主（host/Terrarium.exe）在 WebView2 里打开；单独用浏览器打开时使用模拟数据，方便调界面
   - 主题与参数来自 themes.json，控件按清单自动生成
   - 实时预览：iframe 加载主题页面的 ?preview=1 模式，用你桌面上真实的图标位置
   - 和宿主的消息（JSON 字符串）：
@@ -120,14 +120,6 @@
   .theme .thumb { flex: none; width: 100%; height: 112px; border-radius: 20px; position: relative; overflow: hidden; }
   .theme .thumb > img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
   .theme:disabled .thumb { filter: saturate(.55) brightness(1.02); opacity: .75; }
-  .theme.locked .thumb { filter: none; opacity: 1; }
-  .purchase-box { max-width: 440px; }
-  .purchase-icon { display: grid; place-items: center; width: 42px; height: 42px; margin-bottom: 16px; border-radius: 14px;
-    background: var(--panel-2); color: var(--text); }
-  .purchase-icon svg { width: 21px; height: 21px; }
-  .theme .lock-mark { position: absolute; right: 12px; bottom: 12px; display: grid; place-items: center; width: 30px; height: 30px;
-    border-radius: 50%; background: rgba(255, 255, 255, .94); color: #252a28; box-shadow: 0 2px 10px rgba(0, 0, 0, .14); }
-  .theme .lock-mark svg { width: 15px; height: 15px; }
   .theme.ongoing-card { border-color: var(--line); border-style: dashed; }
   .theme.ongoing-card:disabled .thumb { filter: none; opacity: 1; }
   .ongoing-art { display: grid; place-items: center; background: var(--panel-2); color: var(--muted); }
@@ -274,7 +266,7 @@
 <body>
 <header class="top">
   <div class="top-left">
-    <div class="brand">Deskland Preview</div>
+    <div class="brand">Terrarium</div>
     <div class="section-title" data-i18n="themes">主题</div>
   </div>
   <div class="top-right">
@@ -282,7 +274,7 @@
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M1.8 8h12.4M8 1.8c1.8 1.7 2.7 3.8 2.7 6.2S9.8 12.5 8 14.2C6.2 12.5 5.3 10.4 5.3 8S6.2 3.5 8 1.8z"/></svg>
       <select id="lang" data-i18n-title="language" aria-label="Language"></select>
     </label>
-    <label class="switch-row" data-i18n-title="autostartTitle" title="开机后自动运行 Deskland">
+    <label class="switch-row" data-i18n-title="autostartTitle" title="开机后自动运行 Terrarium">
       <span data-i18n="autostart">开机自动启动</span><input type="checkbox" id="autostart"><i class="switch"></i>
     </label>
   </div>
@@ -324,19 +316,6 @@
   </div>
 </main>
 
-<div class="modal" id="purchaseModal" hidden role="dialog" aria-modal="true" aria-labelledby="purchaseTitle">
-  <div class="box purchase-box">
-    <div class="purchase-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="11" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></div>
-    <h3 id="purchaseTitle" data-i18n="purchaseTitle">购买壁纸版</h3>
-    <p class="sub" id="purchaseTheme"></p>
-    <p class="sub" data-i18n="purchaseMessage">体验版可永久使用沙滩和草地。壁纸版可解锁更多主题，并在同一个 Deskland 中使用。</p>
-    <div class="actions">
-      <button class="ghost-btn" id="purchaseLater" data-i18n="purchaseLater">继续体验</button>
-      <button class="ghost-btn primary" id="purchaseWebsite" data-i18n="purchaseWebsite">前往官网</button>
-    </div>
-  </div>
-</div>
-
 <div class="modal" id="shareModal" hidden role="dialog" aria-modal="true" aria-labelledby="shareTitle">
   <div class="box">
     <h3 id="shareTitle">桌面图已经准备好了</h3>
@@ -347,7 +326,7 @@
     <div class="actions">
       <button class="ghost-btn" id="shareReveal" data-i18n="openFolder">打开所在文件夹</button>
       <button class="ghost-btn" id="shareOpen">打开图片</button>
-      <a class="ghost-btn" id="shareDownload" hidden download="Deskland.png">保存图片</a>
+      <a class="ghost-btn" id="shareDownload" hidden download="Terrarium.png">保存图片</a>
       <button class="ghost-btn primary" id="shareClose" data-i18n="ok">好的</button>
     </div>
   </div>
@@ -359,12 +338,12 @@
     <h3 id="helpTitle" data-i18n="helpTitle">使用帮助</h3>
     <p class="sub" data-i18n="helpSubtitle">常见使用问题和解决方法</p>
     <section class="help-article">
-      <h4 data-i18n="helpWallpaperQ">Deskland 频繁闪烁或重启，怎么办？</h4>
-      <p data-i18n="helpWallpaperA">如果系统壁纸会定时自动切换，切换时可能让 Deskland 闪烁或反复重启。请把常规壁纸改成不会自动切换的固定背景。</p>
+      <h4 data-i18n="helpWallpaperQ">Terrarium 频繁闪烁或重启，怎么办？</h4>
+      <p data-i18n="helpWallpaperA">如果系统壁纸会定时自动切换，切换时可能让 Terrarium 闪烁或反复重启。请把常规壁纸改成不会自动切换的固定背景。</p>
       <ol>
         <li data-i18n="helpWallpaperStep1">打开 Windows 设置 → 个性化 → 背景。</li>
         <li data-i18n="helpWallpaperStep2">将“个性化设置背景”设为“图片”或“纯色”，不要选择“幻灯片放映”或“Windows 聚焦”。</li>
-        <li data-i18n="helpWallpaperStep3">改完后重新打开 Deskland。</li>
+        <li data-i18n="helpWallpaperStep3">改完后重新打开 Terrarium。</li>
       </ol>
     </section>
     <div class="actions"><button class="ghost-btn primary" id="helpDone" data-i18n="gotIt">知道了</button></div>
@@ -463,7 +442,7 @@ async function setLang(code) {
 // 换了语言：界面上的字都重新填一遍（预览不用重新加载）
 function rerenderTexts() {
   if (!state.screen) return;
-  renderHead(); renderThemes(); renderControls(); updateFoot(); shareBusy(shareState); showAutostartWarn(); showUpdate(); updatePurchaseText();
+  renderHead(); renderThemes(); renderControls(); updateFoot(); shareBusy(shareState); showAutostartWarn(); showUpdate();
 }
 $('lang').addEventListener('change', e => {
   state.langSetting = e.target.value;
@@ -491,36 +470,17 @@ function fmt(p, v) {
 const thumbUrl = (value, id) => window.DESKLAND_THUMBS?.[id] || String(value || '').match(/^url\(([^)]+)\)/)?.[1] || '';
 function renderThemes() {
   $('themes').innerHTML = state.registry.themes.map(th => {
-    const locked = th.locked === true, ready = th.status === 'ready', on = th.id === state.theme;
-    const label = locked ? t('lockedTitle', { name: th.name }) : th.name;
-    return `<button class="theme${on ? ' on' : ''}${locked ? ' locked' : ''}" data-id="${th.id}" data-locked="${locked}" aria-pressed="${on}" aria-label="${label}" ${ready || locked ? '' : 'disabled'}>
-      <div class="theme-copy"><div class="theme-meta"><span class="badge">${t(on ? 'badgeOn' : locked ? 'badgeLocked' : ready ? 'badgeReady' : 'badgeSoon')}</span>
+    const ready = th.status === 'ready', on = th.id === state.theme;
+    return `<button class="theme${on ? ' on' : ''}" data-id="${th.id}" aria-pressed="${on}" aria-label="${th.name}" ${ready ? '' : 'disabled'}>
+      <div class="theme-copy"><div class="theme-meta"><span class="badge">${t(on ? 'badgeOn' : ready ? 'badgeReady' : 'badgeSoon')}</span>
         <svg class="theme-arrow" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 15 15 5M5 5h10v10"/></svg></div>
         <div class="name">${th.name}</div></div>
-      <div class="thumb" style="background:${th.thumb || '#ccc'}">${thumbUrl(th.thumb, th.id) ? `<img src="${thumbUrl(th.thumb, th.id)}" alt="" decoding="async">` : ''}${locked ? `<span class="lock-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="11" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>` : ''}</div></button>`;
+      <div class="thumb" style="background:${th.thumb || '#ccc'}">${thumbUrl(th.thumb, th.id) ? `<img src="${thumbUrl(th.thumb, th.id)}" alt="" decoding="async">` : ''}</div></button>`;
   }).join('');
-}
-let purchaseThemeId = null, purchaseReturnFocus = null;
-function updatePurchaseText() {
-  const th = themeById(purchaseThemeId);
-  if (th) $('purchaseTheme').textContent = t('purchaseTheme', { name: th.name });
-}
-function showPurchase(id) {
-  purchaseThemeId = id;
-  purchaseReturnFocus = document.activeElement;
-  updatePurchaseText();
-  $('purchaseModal').hidden = false;
-  $('purchaseWebsite').focus();
-}
-function closePurchase() {
-  if ($('purchaseModal').hidden) return;
-  $('purchaseModal').hidden = true;
-  if (purchaseReturnFocus) purchaseReturnFocus.focus();
 }
 $('themes').addEventListener('click', e => {
   const b = e.target.closest('.theme');
   if (!b || b.disabled) return;
-  if (b.dataset.locked === 'true') { showPurchase(b.dataset.id); return; }
   if (b.dataset.id === state.theme) return;
   state.theme = b.dataset.id;
   send({ t: 'theme', id: state.theme });
@@ -727,7 +687,7 @@ function showShare(r) {
   if (!inHost) {
     $('shareDownload').href = r.full;
     $('shareDownload').textContent = t(video ? 'saveVideo' : 'saveImage');
-    $('shareDownload').download = 'Deskland.' + (video ? (r.ext || 'mp4') : 'png');
+    $('shareDownload').download = 'Terrarium.' + (video ? (r.ext || 'mp4') : 'png');
   }
   $('shareModal').hidden = false;
   $('shareClose').focus();
@@ -751,12 +711,6 @@ $('shareVideo').addEventListener('click', () => {
     showShare({ ok: true, kind: 'video', url, full: url, thumb: r.poster, ext: r.mime === 'video/webm' ? 'webm' : 'mp4' });
   }, e => showShare({ ok: false, kind: 'video', msg: e.message }));
 });
-$('purchaseLater').addEventListener('click', closePurchase);
-$('purchaseModal').addEventListener('click', e => { if (e.target === $('purchaseModal')) closePurchase(); });
-$('purchaseWebsite').addEventListener('click', () => {
-  if (host) send({ t: 'openWebsite' });
-  else window.open('https://deskland.app/', '_blank', 'noopener');
-});
 $('shareClose').addEventListener('click', closeShare);
 $('shareModal').addEventListener('click', e => { if (e.target === $('shareModal')) closeShare(); });
 
@@ -777,7 +731,7 @@ $('helpCloseX').addEventListener('click', closeHelp);
 $('helpDone').addEventListener('click', closeHelp);
 $('helpModal').addEventListener('click', e => { if (e.target === $('helpModal')) closeHelp(); });
 
-addEventListener('keydown', e => { if (e.key === 'Escape') { closeShare(); closeHelp(); closePurchase(); } });
+addEventListener('keydown', e => { if (e.key === 'Escape') { closeShare(); closeHelp(); } });
 $('shareOpen').addEventListener('click', () => send({ t: 'openShare' }));
 $('shareReveal').addEventListener('click', () => send({ t: 'revealShare' }));
 
