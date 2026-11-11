@@ -4,7 +4,7 @@
 
 Terrarium turns the space around your desktop icons into a small living world. Move, add or remove an icon and the landscape quietly reshapes around it in real time. Everything runs locally: no AI, no account, no network service.
 
-Terrarium is a fork of [Deskland Preview](https://github.com/BLEZZ0102/Deskland) by the Deskland authors, released under GPL-3.0. It adds four new themes, drops the locked paid-edition previews and ships under its own name and icon. It is not affiliated with or endorsed by the Deskland project.
+Terrarium is a fork of [Deskland Preview](https://github.com/BLEZZ0102/Deskland) by the Deskland authors, released under GPL-3.0. It adds five new themes, drops the locked paid-edition previews and ships under its own name and icon. It is not affiliated with or endorsed by the Deskland project.
 
 ![Meadow](docs/images/meadow.webp)
 
@@ -18,6 +18,7 @@ Terrarium is a fork of [Deskland Preview](https://github.com/BLEZZ0102/Deskland)
 | **Snowy Mountains** | Snowy clearings in a pine forest, drifting snowfall and a cabin with a smoking chimney. |
 | **Coral Reef** | Sandy reef flats ringed by coral, caustic light, schools of fish and a passing sea turtle. |
 | **City** | Small parks around your icons inside a miniature city with traffic and a day/night cycle that follows your clock. |
+| **Spider Web** | Orb webs spun in the open space between your icons and anchored to them, with dew, a gentle breeze and a wandering spider. Moods: Moonlit, Misty dawn, Halloween. |
 
 Every theme has its own settings, saved between sessions.
 
@@ -80,7 +81,7 @@ The first build downloads portable NSIS and Microsoft's WebView2 bootstrapper. A
 | `host/` | Windows host (C# / WebView2), build script, manifest and icon (`host/icon/terrarium.svg` is the source) |
 | `prototype/themes.json` | Theme registry: page, parameters and defaults for every theme |
 | `prototype/meadow.html`, `flat.html` | Meadow and Beach themes |
-| `prototype/space.html`, `snow.html`, `reef.html`, `city.html` | Night Sky, Snowy Mountains, Coral Reef and City themes |
+| `prototype/space.html`, `snow.html`, `reef.html`, `city.html`, `web.html` | Night Sky, Snowy Mountains, Coral Reef, City and Spider Web themes |
 | `prototype/settings.html` | Settings window |
 | `prototype/share.js` | Privacy-preserving image and animation sharing |
 | `prototype/i18n/` | Interface strings (English) |

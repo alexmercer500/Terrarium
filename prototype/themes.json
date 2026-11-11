@@ -484,6 +484,85 @@
         }
       ],
       "thumbSource": "custom"
+    },
+    {
+      "id": "web",
+      "adaptive": true,
+      "name": "Spider Web",
+      "desc": "Moonlit orb webs spun in the open space between your icons, anchored to them by silk threads, with dew that glints and a small spider that wanders the threads",
+      "page": "web.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "url(thumbs/web.webp?v=4552831812) center / cover no-repeat, radial-gradient(circle at 87% 13%, #e4ecf8 0 3%, rgba(150,180,225,.35) 4.5%, rgba(90,120,170,.12) 14%, transparent 30%), radial-gradient(circle closest-side, rgba(225,235,250,.55) 0 4%, transparent 15.8%, rgba(210,224,245,.4) 15.8% 18.0%, transparent 25.6%, rgba(210,224,245,.4) 25.6% 27.8%, transparent 35.3%, rgba(210,224,245,.4) 35.3% 37.5%, transparent 45.0%, rgba(210,224,245,.4) 45.0% 47.3%, transparent 54.8%, rgba(210,224,245,.4) 54.8% 57.0%, transparent 64.5%, rgba(210,224,245,.4) 64.5% 66.8%, transparent 74.3%, rgba(210,224,245,.4) 74.3% 76.5%, transparent 84.0%, rgba(210,224,245,.4) 84.0% 86.3%, transparent 93.8%, rgba(210,224,245,.4) 93.8% 96.0%, transparent 96.5%) 62% 30% / 30% 53% no-repeat, repeating-conic-gradient(from 7deg, rgba(210,224,245,.4) 0 1.4deg, transparent 1.4deg 20deg) 62% 30% / 30% 53% no-repeat, radial-gradient(circle closest-side, rgba(225,235,250,.55) 0 4%, transparent 15.8%, rgba(210,224,245,.34) 15.8% 18.0%, transparent 31.4%, rgba(210,224,245,.34) 31.4% 33.6%, transparent 47.0%, rgba(210,224,245,.34) 47.0% 49.2%, transparent 62.6%, rgba(210,224,245,.34) 62.6% 64.8%, transparent 78.2%, rgba(210,224,245,.34) 78.2% 80.4%, transparent 93.8%, rgba(210,224,245,.34) 93.8% 96.0%, transparent 96.5%) 14% 78% / 17% 30% no-repeat, repeating-conic-gradient(from 7deg, rgba(210,224,245,.34) 0 1.4deg, transparent 1.4deg 20deg) 14% 78% / 17% 30% no-repeat, radial-gradient(circle closest-side, rgba(225,235,250,.55) 0 4%, transparent 15.8%, rgba(210,224,245,.3) 15.8% 18.0%, transparent 41.8%, rgba(210,224,245,.3) 41.8% 44.0%, transparent 67.8%, rgba(210,224,245,.3) 67.8% 70.0%, transparent 93.8%, rgba(210,224,245,.3) 93.8% 96.0%, transparent 96.5%) 97% 92% / 12% 21% no-repeat, repeating-conic-gradient(from 7deg, rgba(210,224,245,.3) 0 1.4deg, transparent 1.4deg 20deg) 97% 92% / 12% 21% no-repeat, radial-gradient(ellipse at 50% 45%, #1a2431 0%, #0f151d 60%, #070a0f 100%)",
+      "groups": [
+        {
+          "name": "Around icons",
+          "params": [
+            {
+              "key": "density",
+              "label": "Web density",
+              "hint": "How much of the open space between your icons is spun with webs",
+              "min": 0,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.6,
+              "format": "percent"
+            }
+          ]
+        },
+        {
+          "name": "Weather",
+          "params": [
+            {
+              "key": "mood",
+              "label": "Mood",
+              "hint": "Moonlit night, a misty dawn with heavy dew, or a Halloween night with bats",
+              "options": [
+                "Moonlit",
+                "Misty dawn",
+                "Halloween"
+              ],
+              "default": 0
+            },
+            {
+              "key": "dew",
+              "label": "Dew",
+              "hint": "How many dew drops bead the sticky spiral threads",
+              "min": 0,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.5,
+              "format": "percent"
+            },
+            {
+              "key": "wind",
+              "label": "Breeze",
+              "hint": "How strongly the webs sway in the breeze",
+              "min": 0,
+              "max": 3,
+              "step": 0.05,
+              "default": 1,
+              "format": "times"
+            }
+          ]
+        },
+        {
+          "name": "Spider",
+          "params": [
+            {
+              "key": "showSpider",
+              "label": "Show spider",
+              "hint": "A small spider now and then walks the threads and rests at a hub",
+              "options": [
+                "Hide",
+                "Show"
+              ],
+              "default": 1
+            }
+          ]
+        }
+      ],
+      "thumbSource": "custom"
     }
   ]
 }

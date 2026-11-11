@@ -1,0 +1,1935 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terrarium · Spider Web (prototype)</title>
+<!--
+  Terrarium · Spider Web theme (WebGL2)
+  - Orb webs are spun in the open space between the desktop icons. A CPU free-space field (distance from every grid
+    cell to the nearest icon box or screen edge) is filled greedily: the emptiest spot gets a web whose radius fits the
+    free space, then the next, until the gaps are too small. A few cobwebs fill free screen corners, and single strands
+    bridge neighbouring icons.
+  - Each orb web is built like the real thing: a frame polygon, radii from the hub, a hub mesh, a free zone and a
+    capture spiral spun from the outside in (a little irregular, a few broken threads, sometimes a missing sector).
+    Anchor threads run from every frame corner to the nearest icon edge (or the screen edge), so the icons hold it up.
+  - Geometry is rebuilt only when the icons change: every thread segment and dew drop is an instance with a "from"
+    (A) and "to" (B) position; the vertex shader blends them with the morph factor and adds the breeze sway, so moving
+    an icon makes the webs glide, stretch and re-fit smoothly. Webs that no longer fit fade out; new ones are spun in.
+  - Per frame: one full-screen composite of the cached background (re-rendered only on resize / mood change), then
+    instanced thin quads (silk with a light streak that follows the moon), dew drops, the moon and a few sprites
+    (a walking spider, and for Halloween a dangling spider and bats). No per-pixel loops over objects.
+-->
+<style>
+  :root { --taskbar: 48px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1017; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
+
+  .icon {
+    position: absolute; width: 76px; padding: 4px 2px 5px;
+    display: flex; flex-direction: column; align-items: center;
+    border: 1px solid transparent; border-radius: 4px;
+    user-select: none; touch-action: none; cursor: default;
+  }
+  .icon:hover { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.24); }
+  .icon.sel { background: rgba(0,120,215,.34); border-color: rgba(140,200,255,.7); }
+  .icon.drag { opacity: .88; z-index: 10; transform: scale(1.04); }
+  .icon.settle { transition: left .22s cubic-bezier(.2,.8,.3,1), top .22s cubic-bezier(.2,.8,.3,1); }
+  .icon.born { animation: born .45s cubic-bezier(.2,.9,.3,1.2); }
+  @keyframes born { from { opacity: 0; transform: scale(.6); } }
+  .glyph { width: 48px; height: 48px; filter: drop-shadow(0 1px 1px rgba(0,0,0,.25)) drop-shadow(3px 6px 4px rgba(0,0,0,.3)); pointer-events: none; }
+  .glyph svg { width: 100%; height: 100%; display: block; }
+  .label {
+    margin-top: 3px; max-width: 72px; font-size: 12px; line-height: 15px; color: #fff; text-align: center;
+    text-shadow: 0 0 2px rgba(0,0,0,.95), 0 1px 3px rgba(0,0,0,.85);
+    word-break: break-all; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    pointer-events: none;
+  }
+
+  #taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--taskbar);
+    background: rgba(24,28,34,.62); backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    border-top: 1px solid rgba(255,255,255,.08);
+    display: flex; align-items: center; justify-content: center; z-index: 40;
+  }
+  #taskbar .apps { display: flex; gap: 4px; }
+  #taskbar .app { width: 40px; height: 40px; border-radius: 4px; display: grid; place-items: center; }
+  #taskbar .app:hover { background: rgba(255,255,255,.08); }
+  #taskbar .app svg { width: 24px; height: 24px; }
+  #clock { position: absolute; right: 14px; color: #fff; font-size: 12px; line-height: 16px; text-align: right; }
+
+  #panel {
+    position: fixed; top: 14px; right: 14px; width: 292px; max-height: calc(100vh - var(--taskbar) - 28px); overflow: auto;
+    background: rgba(26,32,42,.8); backdrop-filter: blur(18px) saturate(1.3); -webkit-backdrop-filter: blur(18px) saturate(1.3);
+    color: #eef2f5; border: 1px solid rgba(255,255,255,.14); border-radius: 12px;
+    font-size: 12px; line-height: 1.4; box-shadow: 0 12px 32px rgba(0,0,0,.3); z-index: 50;
+  }
+  #panel.hidden { display: none; }
+  /* Wallpaper mode (?wallpaper=1, loaded by the desktop host): Windows draws the real icons and taskbar */
+  body.wall #panel, body.wall #taskbar, body.wall #desktop { display: none; }
+  /* Preview mode (?preview=1, inside the settings window): translucent boxes mark the real icon positions */
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.preview #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(0,0,0,.35); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+  #panel header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 10px; }
+  #panel header b { font-size: 14px; letter-spacing: .06em; }
+  #panel header span { margin-left: 8px; opacity: .55; }
+  #panel.collapsed .body { display: none; }
+  .ibtn { background: none; border: 0; color: inherit; opacity: .6; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; }
+  .ibtn:hover { opacity: 1; }
+  #panel .body { padding: 0 14px 14px; }
+  .sec { margin-top: 12px; }
+  .sec > .t { opacity: .6; margin-bottom: 6px; }
+  .seg { display: grid; grid-template-columns: repeat(4, 1fr); background: rgba(255,255,255,.06); border-radius: 7px; padding: 2px; gap: 2px; }
+  .seg.three { grid-template-columns: repeat(3, 1fr); }
+  .seg button { background: none; border: 0; color: inherit; padding: 5px 0; border-radius: 5px; cursor: pointer; font: inherit; opacity: .75; white-space: nowrap; }
+  .seg button:hover { opacity: 1; }
+  .seg button.on { background: rgba(255,255,255,.17); opacity: 1; }
+  .slider { margin-top: 9px; }
+  .slider .row { display: flex; justify-content: space-between; }
+  .slider .row span:last-child { opacity: .6; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; margin: 4px 0 0; accent-color: #b9c9e6; }
+  .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; }
+  .toggles label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .toggles input { accent-color: #b9c9e6; margin: 0; }
+  .btns { display: flex; gap: 6px; }
+  .btns button {
+    flex: 1; font: inherit; color: inherit; cursor: pointer; padding: 7px 0; border-radius: 7px;
+    background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.1);
+  }
+  .btns button:hover { background: rgba(255,255,255,.18); }
+  #stats { margin-top: 12px; padding: 8px 10px; border-radius: 7px; background: rgba(0,0,0,.25); font-family: Consolas, "Cascadia Mono", monospace; font-size: 11px; line-height: 1.6; color: #d8dee4; }
+  #stats .live { color: #b9c9e6; }
+  .hint { margin-top: 10px; opacity: .5; font-size: 11px; line-height: 1.6; }
+  #nogl { position: fixed; inset: 0; display: none; place-items: center; color: #fff; font-size: 16px; }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="desktop"></div>
+
+<div id="taskbar">
+  <div class="apps">
+    <div class="app"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="12.5" y="2" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="2" y="12.5" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="12.5" y="12.5" width="9.5" height="9.5" fill="#4cc2ff"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="#fff" stroke-width="2"/><path d="M15 15l5 5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v1H2z" fill="#e09b1d"/><path d="M2 9h20v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z" fill="#ffc83d"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#1b8fd6"/><path d="M6 13c1-5 11-6 12 0-3-2-8-2-9 2 0 2 2 3 4 3-4 1-7-1-7-5z" fill="#6fe37a" opacity=".9"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2.5" fill="#2b2b2b" stroke="#777"/><path d="M6 9l3 3-3 3M11 15h6" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg></div>
+  </div>
+  <div id="clock"></div>
+</div>
+
+<aside id="panel">
+  <header>
+    <div><b>Terrarium</b><span>Spider Web · prototype</span></div>
+    <div><button class="ibtn" id="collapse" title="Collapse">–</button></div>
+  </header>
+  <div class="body">
+    <div class="sec"><div class="t">Desktop layout</div>
+      <div class="seg" id="segLayout">
+        <button data-v="mine">Mine</button><button data-v="arranged">Arranged</button><button data-v="messy">Messy</button><button data-v="minimal">Minimal</button>
+      </div>
+    </div>
+    <div class="sec"><div class="t">Mood</div>
+      <div class="seg three" id="segMood">
+        <button data-v="0">Moonlit</button><button data-v="1">Misty dawn</button><button data-v="2">Halloween</button>
+      </div>
+    </div>
+    <div class="sec" id="sliders"></div>
+    <div class="sec toggles">
+      <label><input type="checkbox" data-key="showSpider">Spider</label>
+      <label><input type="checkbox" data-key="adaptive">Follow icons</label>
+      <label><input type="checkbox" data-key="snap">Snap to grid</label>
+      <label><input type="checkbox" data-key="cap30">Cap 30 fps</label>
+    </div>
+    <div class="sec btns">
+      <button id="btnAdd">+ New file</button>
+      <button id="btnSeed">New webs</button>
+    </div>
+    <div id="stats"></div>
+    <div class="hint">Drag icons; the webs re-fit around them.<br>Del deletes · H hides this panel</div>
+  </div>
+</aside>
+<div id="nogl">This browser does not support WebGL2.</div>
+
+<script>
+'use strict';
+
+/* ======================================================================
+   Parameters
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
+const DSTEP = 8;                // free-space grid step (CSS px)
+const MORPH_MS = 1800;
+const ICON_M = 16;              // webs keep this far from icon boxes (anchor threads bridge the gap)
+const EDGE_M = 10;              // and this far from the screen edges
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');      // wallpaper mode: loaded by the desktop host, messages come from the host
+const PREVIEW = QS.has('preview');     // preview mode: thumbnail preview in the settings window (iframe)
+// Defaults must match the `default` values of the web entry in themes.json; quality is not user-facing
+const P = {
+  density: 0.6, dew: 0.5, wind: 1, mood: 0, showSpider: 1, adaptive: 1,
+  quality: 2, snap: true, cap30: true,
+};
+const DEFAULTS = Object.assign({}, P);
+const DISPLAY_KEYS = ['showSpider', 'adaptive'];         // 0 / 1 switches
+const OPTION_KEYS = { mood: 3 };                         // option params: integer index in [0, n)
+const pct = v => Math.round(v * 100) + '%';
+const SLIDERS = [
+  { key: 'density', label: 'Web density', min: 0, max: 1, step: 0.01, fmt: pct, act: 'layout' },
+  { key: 'dew',     label: 'Dew',         min: 0, max: 1, step: 0.01, fmt: pct },
+  { key: 'wind',    label: 'Breeze',      min: 0, max: 3, step: 0.05, fmt: v => '×' + v.toFixed(2) },
+];
+
+/* ======================================================================
+   Mock desktop icons
+   ====================================================================== */
+const PAGE = '<path d="M12 4h17l9 9v29a2 2 0 0 1-2 2H12a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" fill="#fbfbfb" stroke="#c4c4c4"/><path d="M29 4v7a2 2 0 0 0 2 2h7z" fill="#dedede"/>';
+const LINES = '<path d="M24 20h10M24 25h10M24 30h10M24 35h10" stroke="#c9c9c9" stroke-width="1.6"/>';
+const badge = (color, text, size = 11) => `<rect x="4" y="21" width="19" height="19" rx="3" fill="${color}"/><text x="13.5" y="34.5" text-anchor="middle" font-family="Segoe UI,Arial" font-weight="700" font-size="${size}" fill="#fff">${text}</text>`;
+const SVG = {
+  folder: '<path d="M4 12a3 3 0 0 1 3-3h11l4 4h19a3 3 0 0 1 3 3v2H4z" fill="#e09b1d"/><path d="M4 17h40v20a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3z" fill="#ffc83d"/><path d="M4 17h40v2.5H4z" fill="#ffd978"/>',
+  docx: PAGE + LINES + badge('#185abd', 'W'),
+  xlsx: PAGE + '<path d="M24 19h11v17H24zM24 24.5h11M24 30h11M29.5 19v17" stroke="#9ac9a9" stroke-width="1.3" fill="none"/>' + badge('#107c41', 'X'),
+  pdf:  PAGE + LINES + badge('#d33a2c', 'PDF', 7.5),
+  cad:  PAGE + LINES + badge('#2a7fd4', 'DWG', 7),
+  txt:  PAGE + '<path d="M16 18h16M16 23h16M16 28h16M16 33h10" stroke="#9a9a9a" stroke-width="1.6"/>',
+  png:  PAGE + '<rect x="14" y="17" width="20" height="17" rx="1.5" fill="#8fd0f5"/><path d="M14 30l6-6 5 5 3-3 6 6v1.5a1.5 1.5 0 0 1-1.5 1.5h-17A1.5 1.5 0 0 1 14 34z" fill="#3fa35a"/><circle cx="29" cy="21.5" r="2" fill="#fff4b8"/>',
+  shot: '<rect x="3" y="13" width="42" height="25" rx="1" fill="#1d2129" stroke="#f2f2f2" stroke-width="1.5"/><rect x="6" y="16" width="14" height="3" fill="#5b8def"/><rect x="6" y="21" width="22" height="2" fill="#6c7280"/><rect x="6" y="25" width="18" height="2" fill="#6c7280"/><rect x="31" y="16" width="11" height="18" fill="#2e3440"/>',
+  zip:  PAGE + '<path d="M22 4v4h3v3h-3v3h3v3h-3v3h3v3h-3" stroke="#8a6d3b" stroke-width="2" fill="none"/><rect x="20" y="26" width="7" height="8" rx="1" fill="#8a6d3b"/>',
+  bin:  '<path d="M12 14h24l-2.5 27a3 3 0 0 1-3 2.7H17.5a3 3 0 0 1-3-2.7z" fill="rgba(215,235,250,.55)" stroke="rgba(255,255,255,.9)" stroke-width="1.2"/><path d="M10 12.5h28" stroke="rgba(255,255,255,.95)" stroke-width="2.4" stroke-linecap="round"/><path d="M19 19l1 19M24 19v19M29 19l-1 19" stroke="rgba(255,255,255,.7)" stroke-width="1.2"/>',
+  pc:   '<rect x="5" y="8" width="38" height="26" rx="2" fill="#1f8fe0" stroke="#bfe3ff" stroke-width="1.5"/><path d="M5 30h38" stroke="#0d5fa8" stroke-width="3"/><path d="M19 34l-2 6h14l-2-6z" fill="#9aa7b4"/>',
+};
+const APP_COLORS = ['#e8553e','#2f7de1','#18a058','#8b5cf6','#f59e0b','#0ea5a4','#db2777','#334155','#16a34a','#2563eb'];
+function appSVG(name) {
+  let h = 0; for (const ch of name) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return `<rect x="5" y="5" width="38" height="38" rx="9" fill="${APP_COLORS[h % APP_COLORS.length]}"/><path d="M5 14a9 9 0 0 1 9-9h20a9 9 0 0 1 9 9v6H5z" fill="#fff" opacity=".14"/>` +
+    `<text x="24" y="31.5" text-anchor="middle" font-family="Segoe UI,Arial" font-weight="700" font-size="18" fill="#fff">${[...name][0]}</text>`;
+}
+const glyphOf = (name, type) => type === 'app' ? appSVG(name) : SVG[type];
+
+const FILES = [
+  ['Recycle Bin','bin'], ['Projects','folder'], ['Quote 2026.xlsx','xlsx'], ['Product spec.docx','docx'],
+  ['Screenshot_0927.png','png'], ['Contract scan.pdf','pdf'], ['New folder','folder'], ['Design assets','folder'],
+  ['Travel photos','folder'], ['Installer.zip','zip'], ['Meeting notes.docx','docx'], ['Wallpaper ideas','folder'],
+  ['Weekly report.xlsx','xlsx'], ['Sketch.png','png'], ['Old backup','folder'], ['Photo.png','png'], ['Manual.pdf','pdf'], ['Resume.docx','docx'],
+  ['Expenses.xlsx','xlsx'], ['Backup.zip','zip'], ['Reference.png','png'], ['Downloads','folder'], ['Stickers.png','png'], ['Payslip.xlsx','xlsx'],
+  ['Lease.pdf','pdf'], ['Journal.docx','docx'], ['Desktop.png','png'],
+];
+const EXTRA = [
+  ['New Text Document.txt','txt'], ['New folder (2)','folder'], ['Invoice.pdf','pdf'], ['Export.xlsx','xlsx'],
+  ['Screenshot_0928.png','png'], ['Memo.txt','txt'], ['Archive.zip','zip'], ['New folder (3)','folder'],
+];
+const APPS = ['Recycle Bin','This PC','Mail','Slack','Teams','Zoom','Spotify','DaVinci Resolve','Photoshop','Obsidian','VS Code','Krita',
+  'AutoCAD','Rhino','KeyShot','Dropbox','Chrome','Blender','Figma','Notion','Discord','Steam','Eagle','OBS','Postman','PureRef','Recorder','NX 12.0','MarkText','Codex'];
+const MISC = [['projects','folder'],['Games','folder'],['todolist','folder'],['OKR.xlsx','xlsx'],['Fixed costs.xlsx','xlsx'],
+  ['pdfarrange','app'],['stp.log','txt'],['part.stp','txt'],['part.3dm','png'],['Preview','folder']];
+const RIGHT = [['plot.log','txt'],['Tools','folder'],['archive.rar','zip'],['1685x128.png','png'],['image.jpg','png'],['0914.png','png'],
+  ['image 2.jpg','png'],['images.png','png'],['Contents.docx','docx'],['api.txt','txt'],['c4ef.png','png'],['0918.png','png'],
+  ['Board.pdf','pdf'],['recommend.txt','txt'],['button.stp','txt'],['New Text (2).txt','txt'],['ugstep21','txt'],['New Text (3).txt','txt'],
+  ['Plan.txt','txt'],['image 3.jpg','png'],['New DOCX.docx','docx'],['SEO.txt','txt'],['resend.txt','txt'],['Product intro.txt','txt'],
+  ['USER.pdf','pdf'],['New Text.txt','txt'],['Chair.pur','png'],['PAP-20.pdf','pdf'],['Slides.pptx','pdf'],['Issues.txt','txt']];
+function mineCells() {
+  const out = []; let a = 0, m = 0, rgt = 0, sh = 0;
+  for (let c = 0; c < 3; c++) for (let r = 0; r < 10; r++) {
+    const name = APPS[a++];
+    out.push([c, r, name, name === 'Recycle Bin' ? 'bin' : name === 'This PC' ? 'pc' : 'app']);
+  }
+  for (let r = 0; r < 10; r++) out.push([3, r, ...MISC[m++]]);
+  for (let r = 0; r < 5; r++) out.push([5, r, `Part ${r + 1}.dwg`, 'cad']);
+  out.push([6, 0, 'leg-test.bak', 'txt']);
+  for (const [c, r] of [[6,4],[6,5],[6,6],[6,7],[6,8],[7,3],[7,4],[7,5],[7,6],[7,7],[8,4],[8,5],[8,6],[9,2],[9,3],[9,4],[9,5],[9,6]])
+    out.push([c, r, `ScreenShot ${++sh}.png`, 'shot']);
+  for (const [c, r] of [[11,1],[11,2],[11,3],[12,1],[12,2],[12,3],[12,4],[13,1],[13,2],[13,3],[13,4],[14,1],[14,3],[14,4],[15,1],[15,6],
+    [16,4],[16,6],[17,4],[17,5],[17,6],[17,7],[19,4],[19,5],[19,8],[20,0],[20,4],[20,6],[21,0],[21,5],[21,6]]) {
+    const f = RIGHT[rgt++ % RIGHT.length]; out.push([c, r, f[0], f[1]]);
+  }
+  return out;
+}
+
+/* ======================================================================
+   Small math helpers, noise
+   ====================================================================== */
+let seed = (Math.random() * 1e6) | 0;
+function hash2(x, y, k = 0) {
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(seed + k, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x, y, k = 0) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy, k), b = hash2(ix + 1, iy, k), c = hash2(ix, iy + 1, k), d = hash2(ix + 1, iy + 1, k);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+function tileNoise(x, y, px, py, k) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const m = (v, p) => ((v % p) + p) % p;
+  const x0 = m(ix, px), x1 = m(ix + 1, px), y0 = m(iy, py), y1 = m(iy + 1, py);
+  const a = hash2(x0, y0, k), b = hash2(x1, y0, k), c = hash2(x0, y1, k), d = hash2(x1, y1, k);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+function tileFbm(u, v, periods, k) {
+  let s = 0, w = 0.5, tw = 0;
+  for (let i = 0; i < periods.length; i++) { s += w * tileNoise(u * periods[i], v * periods[i], periods[i], periods[i], k + i * 13); tw += w; w *= 0.5; }
+  return s / tw;
+}
+function makeNoiseImage() {                       // tileable 4-channel fbm (fixed seed: the look of the noise never changes)
+  const keep = seed; seed = 4242;
+  const S = 128, d = new Uint8Array(S * S * 4);
+  const chans = [[4, 8, 16], [8, 16, 32], [4, 8], [16, 32, 64]];
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = x / S, v = y / S, i = (y * S + x) * 4;
+    for (let c = 0; c < 4; c++) d[i + c] = Math.min(Math.max((tileFbm(u, v, chans[c], 100 + c * 50) - 0.5) * 1.9 + 0.5, 0), 1) * 255;
+  }
+  seed = keep;
+  return { S, d };
+}
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+const sstep = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0), 1); return t * t * (3 - 2 * t); };
+const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+const lerp = (a, b, t) => a + (b - a) * t;
+const TAU = Math.PI * 2;
+const normA = a => ((a % TAU) + TAU) % TAU;
+const fract = x => x - Math.floor(x);
+
+function rectDist(x, y, r) {
+  const dx = Math.max(r.x0 - x, 0, x - r.x1), dy = Math.max(r.y0 - y, 0, y - r.y1);
+  return Math.hypot(dx, dy);
+}
+function segHitsRect(x0, y0, x1, y1, rx0, ry0, rx1, ry1) {   // Liang-Barsky clip test
+  let t0 = 0, t1 = 1;
+  const dx = x1 - x0, dy = y1 - y0;
+  const p = [-dx, dx, -dy, dy], q = [x0 - rx0, rx1 - x0, y0 - ry0, ry1 - y0];
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) { if (q[i] < 0) return false; continue; }
+    const t = q[i] / p[i];
+    if (p[i] < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+    else { if (t < t0) return false; if (t < t1) t1 = t; }
+  }
+  return true;
+}
+function segHitsAny(x0, y0, x1, y1, rects, skip, inset) {
+  for (const r of rects) {
+    if (r === skip) continue;
+    if (segHitsRect(x0, y0, x1, y1, r.x0 + inset, r.y0 + inset, r.x1 - inset, r.y1 - inset)) return true;
+  }
+  return false;
+}
+function segPointDist(px, py, x0, y0, x1, y1) {
+  const dx = x1 - x0, dy = y1 - y0, l2 = dx * dx + dy * dy;
+  const t = l2 > 0 ? clamp(((px - x0) * dx + (py - y0) * dy) / l2, 0, 1) : 0;
+  return Math.hypot(px - x0 - dx * t, py - y0 - dy * t);
+}
+// Exit distance of a ray that starts inside the box [0, w] x [0, h]
+function rayExit(x, y, dx, dy, w, h) {
+  let t = 1e9;
+  if (dx > 1e-6) t = Math.min(t, (w - x) / dx); else if (dx < -1e-6) t = Math.min(t, -x / dx);
+  if (dy > 1e-6) t = Math.min(t, (h - y) / dy); else if (dy < -1e-6) t = Math.min(t, -y / dy);
+  return Math.max(t, 0);
+}
+
+/* ======================================================================
+   Free-space field: distance from every grid cell to the nearest icon box (inflated) or screen edge
+   ====================================================================== */
+let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1, NZ = null;
+const Hb = () => H - TASKBAR;                     // webs stay above the taskbar
+function buildNoise() {                           // smooth per-cell jitter so equal gaps are not always filled the same way
+  NZ = new Float32Array(Gw * Gh);
+  for (let gy = 0; gy < Gh; gy++) for (let gx = 0; gx < Gw; gx++) NZ[gy * Gw + gx] = vnoise(gx * DSTEP / 230, gy * DSTEP / 230, 5);
+}
+let freeMs = 0, planMs = 0, geomMs = 0;
+function freeField(rects) {
+  const t0 = performance.now();
+  const D = new Float32Array(Gw * Gh), hb = Hb();
+  for (let gy = 0; gy < Gh; gy++) {
+    const y = gy * DSTEP;
+    for (let gx = 0; gx < Gw; gx++) { const x = gx * DSTEP; D[gy * Gw + gx] = Math.min(x, W - x, y, hb - y) - EDGE_M; }
+  }
+  for (const r of rects) {
+    const x0 = r.x0 - ICON_M, x1 = r.x1 + ICON_M, y0 = r.y0 - ICON_M, y1 = r.y1 + ICON_M;
+    for (let gy = 0; gy < Gh; gy++) {
+      const y = gy * DSTEP, dy = Math.max(y0 - y, 0, y - y1);
+      for (let gx = 0, i = gy * Gw; gx < Gw; gx++, i++) {
+        if (dy >= D[i]) continue;
+        const x = gx * DSTEP, dx = Math.max(x0 - x, 0, x - x1);
+        if (dx >= D[i]) continue;
+        const d = (dx > 0 || dy > 0) ? Math.hypot(dx, dy) : -Math.min(x - x0, x1 - x, y - y0, y1 - y);
+        if (d < D[i]) D[i] = d;
+      }
+    }
+  }
+  freeMs = performance.now() - t0;
+  return D;
+}
+const cellAt = (D, x, y) => D[clamp(Math.round(y / DSTEP), 0, Gh - 1) * Gw + clamp(Math.round(x / DSTEP), 0, Gw - 1)];
+
+// Icon boxes the webs keep clear of, with the (slightly inset) rectangle the anchor threads attach to
+function obstacleRects() {
+  return (P.adaptive ? icons : []).map(ic => {
+    const r = { x0: ic.x, y0: ic.y, x1: ic.x + ic.w, y1: ic.y + ic.h };
+    const ix = Math.min(6, ic.w * 0.2), iy = Math.min(2, ic.h * 0.1);
+    r.a = { x0: r.x0 + ix, y0: r.y0 + iy, x1: r.x1 - ix, y1: r.y1 - iy };
+    return r;
+  });
+}
+
+/* ======================================================================
+   Scene plan: orb webs in the open spaces, cobwebs in free corners, strands between icons, moon, dangling spider
+   ====================================================================== */
+function planScene(rects, prev = []) {
+  const t0 = performance.now();
+  const D = freeField(rects);
+  const Dicon = D.slice();
+  const hb = Hb(), dens = P.density;
+  const Rmax = clamp(Math.min(W, hb) * 0.36, 110, 330), Rmin = 118 - 78 * dens, maxN = Math.round(2 + 13 * dens);
+  const orbs = [];
+  const place = (cx, cy, R, keep) => {
+    orbs.push({ cx, cy, R, keep });
+    const gap = 14 + 0.12 * R;
+    for (let gy = 0, i = 0; gy < Gh; gy++) for (let gx = 0; gx < Gw; gx++, i++) {
+      const d = Math.hypot(gx * DSTEP - cx, gy * DSTEP - cy) - R - gap;
+      if (d < D[i]) D[i] = d;
+    }
+  };
+  // existing webs stay where they are while they still fit (nudged to the local centre of their free space)
+  for (const o of prev.slice().sort((a, b) => b.R - a.R)) {
+    if (orbs.length >= maxN) break;
+    const rr = Math.ceil(o.R * 0.35 / DSTEP), gx0 = Math.round(o.cx / DSTEP), gy0 = Math.round(o.cy / DSTEP);
+    let bi = -1, bs = -1e9;
+    for (let gy = Math.max(0, gy0 - rr); gy <= Math.min(Gh - 1, gy0 + rr); gy++) for (let gx = Math.max(0, gx0 - rr); gx <= Math.min(Gw - 1, gx0 + rr); gx++) {
+      const i = gy * Gw + gx, s = Math.min(D[i], Math.min(o.R * 1.15, Rmax)) - 0.25 * Math.hypot(gx * DSTEP - o.cx, gy * DSTEP - o.cy);
+      if (s > bs) { bs = s; bi = i; }
+    }
+    if (bi < 0) continue;
+    const R = Math.min(D[bi] * 0.95, Rmax);
+    if (R < Math.max(Rmin, o.R * 0.6)) continue;
+    place((bi % Gw) * DSTEP, Math.floor(bi / Gw) * DSTEP, R, o);
+  }
+  while (orbs.length < maxN) {
+    let bi = -1, bs = 0;
+    for (let i = 0; i < D.length; i++) {
+      const d = D[i];
+      if (d < Rmin) continue;
+      const s = Math.min(d, Rmax * 1.15) * (0.85 + 0.3 * NZ[i]);
+      if (s > bs) { bs = s; bi = i; }
+    }
+    if (bi < 0) break;
+    place((bi % Gw) * DSTEP, Math.floor(bi / Gw) * DSTEP, Math.min(D[bi] * 0.95, Rmax), null);
+  }
+  // cobwebs in free screen corners (whether a corner gets one depends only on the seed, so it doesn't flicker)
+  const corners = [];
+  const cpts = [[0, 0], [W, 0], [0, hb], [W, hb]];
+  for (let c = 0; c < 4; c++) {
+    if (hash2(c, 1, 31) > 0.3 + 0.55 * dens) continue;
+    const [px, py] = cpts[c];
+    let f = 1e9;
+    for (const r of rects) f = Math.min(f, rectDist(px, py, r) - ICON_M);
+    for (const o of orbs) f = Math.min(f, Math.hypot(px - o.cx, py - o.cy) - o.R - 12);
+    const R = Math.min(f * 0.92, 95 + 85 * hash2(c, 2, 31));
+    if (R < 52) continue;
+    corners.push({ c, px, py, R });
+  }
+  // single strands between neighbouring icons
+  const bridges = [], nB = Math.round(1 + 6 * dens);
+  if (rects.length >= 2) {
+    const cands = [];
+    for (let i = 0; i < rects.length; i++) for (let j = i + 1; j < rects.length; j++) {
+      const a = rects[i].a, b = rects[j].a;
+      const acx = (a.x0 + a.x1) / 2, acy = (a.y0 + a.y1) / 2, bcx = (b.x0 + b.x1) / 2, bcy = (b.y0 + b.y1) / 2;
+      if (Math.abs(acx - bcx) > 520 || Math.abs(acy - bcy) > 520) continue;
+      const h = hash2(Math.round(acx + bcx), Math.round(acy + bcy), 91);
+      // closest points between the two boxes (a random spot where they overlap on one axis)
+      let x0, x1, y0, y1;
+      if (a.x1 < b.x0) { x0 = a.x1; x1 = b.x0; } else if (b.x1 < a.x0) { x0 = a.x0; x1 = b.x1; }
+      else { const lo = Math.max(a.x0, b.x0), hi = Math.min(a.x1, b.x1); x0 = x1 = lerp(lo, hi, 0.2 + 0.6 * h); }
+      if (a.y1 < b.y0) { y0 = a.y1; y1 = b.y0; } else if (b.y1 < a.y0) { y0 = a.y0; y1 = b.y1; }
+      else { const lo = Math.max(a.y0, b.y0), hi = Math.min(a.y1, b.y1); y0 = y1 = lerp(lo, hi, 0.25 + 0.5 * h); }
+      const len = Math.hypot(x1 - x0, y1 - y0);
+      if (len < 90 || len > 430) continue;
+      let ok = true;
+      for (let k = 0; k < rects.length && ok; k++) {
+        const r = rects[k];
+        if (k !== i && k !== j && segHitsRect(x0, y0, x1, y1, r.x0 - 4, r.y0 - 4, r.x1 + 4, r.y1 + 4)) ok = false;
+      }
+      for (const o of orbs) if (segPointDist(o.cx, o.cy, x0, y0, x1, y1) < o.R + 8) { ok = false; break; }
+      if (ok) for (const o of corners) if (segPointDist(o.px, o.py, x0, y0, x1, y1) < o.R + 8) { ok = false; break; }
+      if (!ok) continue;
+      cands.push({ x0, y0, x1, y1, i, j, score: h * (len > 140 && len < 340 ? 1 : 0.6) });
+    }
+    cands.sort((p, q) => q.score - p.score);
+    for (const c of cands) {
+      if (bridges.length >= nB) break;
+      const mx = (c.x0 + c.x1) / 2, my = (c.y0 + c.y1) / 2;
+      if (bridges.some(b => Math.hypot((b.x0 + b.x1) / 2 - mx, (b.y0 + b.y1) / 2 - my) < 110 || (b.i === c.i && b.j === c.j))) continue;
+      bridges.push(c);
+    }
+  }
+  // the moon: in the open sky, preferably high up and to the right, never behind an icon
+  let moon = null, ms = -1e9;
+  for (let gy = 0, i = 0; gy < Gh; gy++) for (let gx = 0; gx < Gw; gx++, i++) {
+    if (Dicon[i] < 64) continue;
+    const x = gx * DSTEP, y = gy * DSTEP;
+    const s = -y + 0.35 * x + 0.5 * Math.min(Dicon[i], 220);
+    if (s > ms) { ms = s; moon = [x, y]; }
+  }
+  if (!moon) moon = [W * 0.8, H * 0.16];
+  // a spider dangling on a single strand below an icon (Halloween)
+  let hang = null;
+  const order = rects.map((r, i) => [hash2(Math.round(r.x0), Math.round(r.y0), 57), r]).sort((p, q) => p[0] - q[0]);
+  for (const [h, r] of order) {
+    const x = (r.x0 + r.x1) / 2 + (h - 0.5) * 18, y = r.y1 - 2, len = 70 + 70 * h;
+    let ok = true;
+    for (let s = 24; s < len + 34 && ok; s += 8) if (cellAt(D, x, y + s) < 10) ok = false;
+    if (ok) { hang = [x, y, len]; break; }
+  }
+  if (!hang) for (let k = 0; k < 12 && !hang; k++) {
+    const x = W * (0.15 + 0.7 * hash2(k, 3, 57)), len = 80 + 60 * hash2(k, 4, 57);
+    let ok = true;
+    for (let s = 24; s < len + 34 && ok; s += 8) if (cellAt(D, x, s) < 10) ok = false;
+    if (ok) hang = [x, -4, len];
+  }
+  planMs = performance.now() - t0;
+  return { orbs, corners, bridges, moon, hang, D };
+}
+
+/* ======================================================================
+   Web topology (fixed for the life of a web) and spec (re-fitted to the icons on every change)
+   Positions are linear in the spec numbers, so blending two specs equals blending the drawn geometry.
+   ====================================================================== */
+function newOrbTopo(rng, R) {
+  const N = clamp(Math.round(12 + R * 0.075 + rng() * 4), 12, 40);
+  const rot = rng() * TAU, phi = [];
+  for (let j = 0; j < N; j++) phi.push(normA(rot + TAU * (j + (rng() - 0.5) * 0.42) / N));
+  phi.sort((a, b) => a - b);
+  const nF = R < 90 ? 4 + (rng() < 0.5 ? 1 : 0) : 5 + Math.floor(rng() * 3);
+  const rotF = rng() * TAU, th = [], fr = [];
+  for (let k = 0; k < nF; k++) th.push(normA(rotF + TAU * (k + (rng() - 0.5) * 0.5) / nF));
+  th.sort((a, b) => a - b);
+  for (let k = 0; k < nF; k++) fr.push(0.84 + 0.16 * rng());
+  const tp = {
+    N, nF, phi, th, fr,
+    cs: phi.map(Math.cos), sn: phi.map(Math.sin), ct: th.map(Math.cos), st: th.map(Math.sin),
+    hubDx: (rng() - 0.5) * 0.08, hubDy: -(0.05 + 0.1 * rng()),
+    hubF: 0.075 + 0.03 * rng(), inF: 0.21 + 0.06 * rng(), out: 0.9 + 0.04 * rng(),
+    miss: rng() < 0.22 ? Math.floor(rng() * N) : -1,
+    key: rng() * TAU, R0: R,
+  };
+  const spacing = clamp(3.3 + R * 0.016, 4, 8.2);
+  tp.turns = Math.max(5, Math.round((tp.out - tp.inF) * R / spacing));
+  // which frame edge each radius ends on
+  tp.edge = phi.map(a => { let k = nF - 1; for (let i = 0; i < nF; i++) if (th[i] <= a) k = i; return k; });
+  // frame polyline: frame corners and radius ends in angular order (k >= 0: corner, -(j + 1): radius end)
+  tp.order = th.map((a, k) => [a, k]).concat(phi.map((a, j) => [a, -(j + 1)])).sort((p, q) => p[0] - q[0]).map(p => p[1]);
+  // capture spiral: smooth irregular spacing, a few broken threads, dew counts per segment
+  const M = N * tp.turns, ns = rng() * 1000;
+  tp.nz = new Float32Array(M + 1);
+  const n1 = x => { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f); return lerp(fract(Math.sin((i + ns) * 127.1) * 43758.5), fract(Math.sin((i + 1 + ns) * 127.1) * 43758.5), u); };
+  for (let m = 0; m <= M; m++) tp.nz[m] = (n1(m * 0.09) - 0.5) * 0.42 + (n1(m * 0.027 + 50) - 0.5) * 0.28;
+  tp.brk = new Uint8Array(M);
+  tp.dewN = new Uint8Array(M);
+  tp.dewH = new Float32Array(M);
+  for (let m = 0; m < M; m++) {
+    tp.brk[m] = rng() < 0.012 ? 1 : 0;
+    const s = 1 - m / M, est = (tp.inF + (tp.out - tp.inF) * s) * R * TAU / N;
+    tp.dewN[m] = Math.min(6, Math.floor(est / 11 + rng()));
+    tp.dewH[m] = rng() * 1000;
+  }
+  // hub mesh: a few irregular rings and short chords
+  tp.rings = []; const nR = 3 + (rng() < 0.5 ? 1 : 0);
+  for (let i = 0; i < nR; i++) { const rj = []; for (let j = 0; j < N; j++) rj.push((0.3 + 0.7 * i / (nR - 1)) * (1 + (rng() - 0.5) * 0.25)); tp.rings.push(rj); }
+  tp.chords = []; const nc = 5 + Math.floor(rng() * 7);
+  for (let i = 0; i < nc; i++) tp.chords.push([Math.floor(rng() * N), 0.2 + 0.8 * rng(), 0.2 + 0.8 * rng()]);
+  return tp;
+}
+function rayCircle(ox, oy, ux, uy, R) {           // origin relative to the circle center (inside it)
+  const b = ox * ux + oy * uy, c = ox * ox + oy * oy - R * R;
+  return -b + Math.sqrt(Math.max(b * b - c, 0));
+}
+function rayHitSeg(hx, hy, ux, uy, ax, ay, bx, by) {
+  const ex = bx - ax, ey = by - ay, den = ux * ey - uy * ex;
+  if (Math.abs(den) < 1e-9) return Math.hypot((ax + bx) / 2 - hx, (ay + by) / 2 - hy);
+  return ((ax - hx) * ey - (ay - hy) * ex) / den;
+}
+// Where an anchor thread from a frame corner attaches: the nearest icon edge roughly outward, else the screen edge
+function findAnchor(vx, vy, ux, uy, R, rects) {
+  const maxL = Math.max(R * 1.7, 200);
+  let best = null, bc = 1e9;
+  for (const r of rects) {
+    const a = r.a, qx = clamp(vx, a.x0, a.x1), qy = clamp(vy, a.y0, a.y1);
+    const dx = qx - vx, dy = qy - vy, d = Math.hypot(dx, dy);
+    if (d < 2 || d > maxL) continue;
+    const c = (dx * ux + dy * uy) / d;
+    if (c < 0.3) continue;
+    const cost = d * (1.9 - c);
+    if (cost >= bc) continue;
+    if (segHitsAny(vx, vy, qx, qy, rects, r, 2)) continue;
+    bc = cost; best = [qx, qy];
+  }
+  const hb = Hb();
+  for (const da of [0, 0.3, -0.3, 0.6, -0.6]) {
+    const ca = Math.cos(da), sa = Math.sin(da), dx = ux * ca - uy * sa, dy = ux * sa + uy * ca;
+    const t = rayExit(vx, vy, dx, dy, W, hb);
+    const cost = t * (1.9 - ca) * 1.4;
+    if (cost >= bc) continue;
+    const qx = vx + dx * (t + 6), qy = vy + dy * (t + 6);
+    if (segHitsAny(vx, vy, qx, qy, rects, null, 2)) continue;
+    bc = cost; best = [qx, qy];
+  }
+  return best || [vx, vy];
+}
+function orbSpec(tp, p, rects) {
+  const R = p.R, hx = p.cx + tp.hubDx * R, hy = p.cy + tp.hubDy * R;
+  const rho = [], vx = [], vy = [];
+  for (let k = 0; k < tp.nF; k++) {
+    rho[k] = rayCircle(hx - p.cx, hy - p.cy, tp.ct[k], tp.st[k], R) * tp.fr[k];
+    vx[k] = hx + tp.ct[k] * rho[k]; vy[k] = hy + tp.st[k] * rho[k];
+  }
+  const L = [];
+  for (let j = 0; j < tp.N; j++) {
+    const k = tp.edge[j], k2 = (k + 1) % tp.nF;
+    L[j] = Math.max(rayHitSeg(hx, hy, tp.cs[j], tp.sn[j], vx[k], vy[k], vx[k2], vy[k2]), R * 0.3);
+  }
+  const Lavg = L.reduce((a, b) => a + b, 0) / L.length;
+  const anc = [];
+  for (let k = 0; k < tp.nF; k++) { const q = findAnchor(vx[k], vy[k], tp.ct[k], tp.st[k], R, rects); anc.push(q[0], q[1]); }
+  return { cx: p.cx, cy: p.cy, R, hx, hy, amp: Math.min(0.016 * R, 5), rho, L, Lavg, anc };
+}
+const CORNER_A0 = [0, Math.PI / 2, -Math.PI / 2, Math.PI];      // top-left, top-right, bottom-left, bottom-right: radii fan over 90 degrees
+function newCornerTopo(rng, c, R) {
+  const nR = 5 + Math.floor(rng() * 3), nA = 5 + Math.floor(rng() * 3), ang = [], fr = [], jit = [], ext = [];
+  for (let i = 0; i < nR; i++) { ang.push((0.035 + 0.93 * i / (nR - 1)) + (i > 0 && i < nR - 1 ? (rng() - 0.5) * 0.08 : 0)); ext.push(1.0 + 0.1 * rng()); }
+  for (let m = 0; m < nA; m++) fr.push(0.2 + 0.75 * Math.pow(m / (nA - 1), 0.9));
+  for (let i = 0; i < nA * nR; i++) jit.push((rng() - 0.5) * 0.12);
+  const dewN = [], dewH = [];
+  for (let i = 0; i < nA * nR * 5; i++) { dewN.push(rng() < 0.45 ? 1 : 0); dewH.push(rng() * 1000); }
+  return { c, nR, nA, ang, fr, jit, ext, dewN, dewH, key: rng() * TAU, a0: CORNER_A0[c] };
+}
+function cornerSpec(p) { return { px: p.px, py: p.py, R: p.R, amp: Math.min(0.03 * p.R, 4) }; }
+function newBridgeTopo(rng) {
+  const drops = [];
+  const n = 2 + Math.floor(rng() * 4);
+  for (let i = 0; i < n; i++) drops.push([0.15 + 0.7 * rng(), rng(), rng()]);
+  return { key: rng() * TAU, drops };
+}
+function bridgeSpec(p) { return { x0: p.x0, y0: p.y0, x1: p.x1, y1: p.y1 }; }
+function lerpSpec(a, b, t) {
+  if (a === b || t >= 1) return b;
+  if (t <= 0) return a;
+  const o = {};
+  for (const k in b) {
+    const va = a[k], vb = b[k];
+    o[k] = Array.isArray(vb) ? vb.map((v, i) => va[i] + (v - va[i]) * t) : va + (vb - va) * t;
+  }
+  return o;
+}
+
+/* ======================================================================
+   Geometry emission: thread segments (x0, y0, x1, y1, amp0, amp1, width, kind, born) and dew drops
+   kind 0 = dry structural silk, 1 = capture spiral, 2 = hub mesh. born = when a newly spun piece appears (0..0.84)
+   ====================================================================== */
+class Em {
+  constructor() { this.s = []; this.d = []; }
+  seg(x0, y0, x1, y1, a0, a1, w, k, born) { this.s.push(x0, y0, x1, y1, a0, a1, w, k, born); }
+  drop(x, y, tx, ty, amp, r, rank, born) { this.d.push(x, y, tx, ty, amp, r, rank, born); }
+}
+function emitAnchor(E, vx, vy, qx, qy, ampV, born) {
+  const dx = qx - vx, dy = qy - vy, len = Math.hypot(dx, dy);
+  const ux = len > 1e-6 ? dx / len : 1, uy = len > 1e-6 ? dy / len : 0;
+  const tuft = Math.min(7, len * 0.2), ex = qx - ux * tuft, ey = qy - uy * tuft;
+  const sag = 0.035 * Math.abs(dx), sAmp = Math.min(0.02 * len, 6);
+  const n = 8;
+  let px = vx, py = vy, pa = ampV;
+  for (let i = 1; i <= n; i++) {
+    const s = i / n, b = 4 * s * (1 - s);
+    const x = vx + (ex - vx) * s, y = vy + (ey - vy) * s + sag * b, a = (1 - s) * ampV + b * sAmp;
+    E.seg(px, py, x, y, pa, a, 0.8, 0, born + 0.08 * s);
+    px = x; py = y; pa = a;
+  }
+  const nx = -uy, ny = ux, sp = tuft * 0.35;              // attachment: the thread splits into a little fan on the icon edge
+  for (const o of [-1, 0, 1]) E.seg(ex, ey, qx + nx * o * sp, qy + ny * o * sp, 0, 0, 0.45, 0, born + 0.1);
+}
+function emitOrb(tp, S, E) {
+  const { hx, hy, amp, L, rho, R } = S, N = tp.N, nF = tp.nF;
+  const ampAt = f => amp * (1 - 0.85 * f * f), fa = ampAt(1);
+  // anchor threads first (a spider starts with the bridge and frame lines)
+  for (let k = 0; k < nF; k++) emitAnchor(E, hx + tp.ct[k] * rho[k], hy + tp.st[k] * rho[k], S.anc[2 * k], S.anc[2 * k + 1], fa, 0.02 + 0.1 * k / nF);
+  // frame: polyline through frame corners and radius ends
+  const ptOf = it => it >= 0 ? [hx + tp.ct[it] * rho[it], hy + tp.st[it] * rho[it]] : [hx + tp.cs[-it - 1] * L[-it - 1], hy + tp.sn[-it - 1] * L[-it - 1]];
+  const no = tp.order.length;
+  for (let i = 0; i < no; i++) {
+    const a = ptOf(tp.order[i]), b = ptOf(tp.order[(i + 1) % no]);
+    E.seg(a[0], a[1], b[0], b[1], fa, fa, 0.9, 0, 0.06 + 0.1 * i / no);
+  }
+  // radii (subdivided so the breeze can bend them)
+  const hubR = R * tp.hubF, r0 = hubR * 0.06;
+  for (let j = 0; j < N; j++) {
+    const c = tp.cs[j], s = tp.sn[j], Lj = L[j], born = 0.16 + 0.2 * j / N;
+    let pr = r0;
+    for (let i = 1; i <= 10; i++) {
+      const r = r0 + (Lj - r0) * i / 10;
+      E.seg(hx + c * pr, hy + s * pr, hx + c * r, hy + s * r, ampAt(pr / Lj), ampAt(r / Lj), 0.6, 0, born);
+      pr = r;
+    }
+  }
+  // hub mesh
+  for (const rj of tp.rings) for (let j = 0; j < N; j++) {
+    const j2 = (j + 1) % N, ra = hubR * rj[j], rb = hubR * rj[j2];
+    E.seg(hx + tp.cs[j] * ra, hy + tp.sn[j] * ra, hx + tp.cs[j2] * rb, hy + tp.sn[j2] * rb, amp, amp, 0.55, 2, 0.36);
+  }
+  for (const [j, f1, f2] of tp.chords) {
+    const j2 = (j + 1) % N, ra = hubR * f1, rb = hubR * f2;
+    E.seg(hx + tp.cs[j] * ra, hy + tp.sn[j] * ra, hx + tp.cs[j2] * rb, hy + tp.sn[j2] * rb, amp, amp, 0.5, 2, 0.38);
+  }
+  // capture spiral, spun from the outside in, leaving a free zone around the hub
+  // the outer turns follow the frame, the inner ones are rounder (as in a real orb web)
+  const M = N * tp.turns, Rin = R * tp.inF, Lc = S.Lavg * tp.out * 0.86;
+  const rad = m => {
+    const j = m % N, s = Math.max(0, 1 - m / M + tp.nz[m] / tp.turns), c = 0.8 * Math.pow(1 - Math.min(s, 1), 0.7);
+    return Math.min(Rin + s * ((1 - c) * (L[j] * tp.out - Rin) + c * (Lc - Rin)), L[j] * tp.out);
+  };
+  let ra = rad(0);
+  for (let m = 0; m < M; m++) {
+    const j0 = m % N, j1 = (m + 1) % N, rb = rad(m + 1);
+    if (j0 !== tp.miss && !tp.brk[m]) {
+      const x0 = hx + tp.cs[j0] * ra, y0 = hy + tp.sn[j0] * ra, x1 = hx + tp.cs[j1] * rb, y1 = hy + tp.sn[j1] * rb;
+      const a0 = ampAt(ra / L[j0]), a1 = ampAt(rb / L[j1]), born = 0.4 + 0.44 * m / M;
+      E.seg(x0, y0, x1, y1, a0, a1, 0.62, 1, born);
+      const nd = tp.dewN[m];
+      if (nd) {
+        const dx = x1 - x0, dy = y1 - y0, l = Math.hypot(dx, dy) || 1, hs = tp.dewH[m];
+        for (let q = 0; q < nd; q++) {
+          const u = (q + 0.2 + 0.6 * fract(Math.sin(hs + q * 7.1) * 4375.85)) / nd;
+          const rr = fract(Math.sin(hs * 1.3 + q * 3.7) * 9137.13), rank = fract(Math.sin(hs * 0.7 + q * 11.3) * 6173.91);
+          E.drop(x0 + dx * u, y0 + dy * u, dx / l, dy / l, a0 + (a1 - a0) * u, 0.5 + 1.25 * rr * rr, rank, born + 0.05);
+        }
+      }
+    }
+    ra = rb;
+  }
+}
+function emitCorner(tp, S, E) {
+  const { px, py, R, amp } = S, a0 = tp.a0;
+  const ampAt = (x, y) => {
+    const dx = x - px, dy = y - py, r = Math.hypot(dx, dy);
+    const f = clamp(normA(Math.atan2(dy, dx) - a0 + 0.3) - 0.3, 0, Math.PI / 2) / (Math.PI / 2);
+    return amp * Math.min(r / R, 1.2) * Math.sin(Math.PI * f);
+  };
+  const dir = i => { const a = a0 + tp.ang[i] * Math.PI / 2; return [Math.cos(a), Math.sin(a)]; };
+  for (let i = 0; i < tp.nR; i++) {
+    const [c, s] = dir(i), len = R * tp.ext[i], born = 0.04 + 0.2 * i / tp.nR;
+    let pr = 0;
+    for (let k = 1; k <= 6; k++) {
+      const r = len * k / 6, xa = px + c * pr, ya = py + s * pr, xb = px + c * r, yb = py + s * r;
+      E.seg(xa, ya, xb, yb, ampAt(xa, ya), ampAt(xb, yb), 0.85, 0, born);
+      pr = r;
+    }
+  }
+  let di = 0;
+  for (let m = 0; m < tp.nA; m++) for (let i = 0; i + 1 < tp.nR; i++) {
+    const [c0, s0] = dir(i), [c1, s1] = dir(i + 1);
+    const ra = R * tp.fr[m] * (1 + tp.jit[m * tp.nR + i]), rb = R * tp.fr[m] * (1 + tp.jit[m * tp.nR + i + 1]);
+    const ax = px + c0 * ra, ay = py + s0 * ra, bx = px + c1 * rb, by = py + s1 * rb;
+    const mx = (ax + bx) / 2 - px, my = (ay + by) / 2 - py, ml = Math.hypot(mx, my) || 1;
+    const sag = 0.2 * Math.hypot(bx - ax, by - ay), born = 0.3 + 0.5 * m / tp.nA;
+    let qx = ax, qy = ay;
+    for (let k = 1; k <= 5; k++, di++) {
+      const t = k / 5, b = 4 * t * (1 - t);
+      const x = ax + (bx - ax) * t - mx / ml * sag * b, y = ay + (by - ay) * t - my / ml * sag * b;
+      E.seg(qx, qy, x, y, ampAt(qx, qy), ampAt(x, y), 0.62, 1, born);
+      if (tp.dewN[di]) {
+        const h = tp.dewH[di], u = fract(Math.sin(h) * 4375.85), dx = x - qx, dy = y - qy, l = Math.hypot(dx, dy) || 1;
+        const ux = qx + dx * u, uy = qy + dy * u, rr = fract(Math.sin(h * 1.3) * 9137.13);
+        E.drop(ux, uy, dx / l, dy / l, ampAt(ux, uy), 0.5 + 1.2 * rr * rr, fract(Math.sin(h * 0.7) * 6173.91), born + 0.05);
+      }
+      qx = x; qy = y;
+    }
+  }
+}
+function emitBridge(tp, S, E) {
+  const { x0, y0, x1, y1 } = S, dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy);
+  const sag = 0.04 * Math.abs(dx) + 0.01 * len, sAmp = Math.min(0.03 * len, 9), n = 14;
+  const pt = s => { const b = 4 * s * (1 - s); return [x0 + dx * s, y0 + dy * s + sag * b, b * sAmp]; };
+  let p = pt(0);
+  for (let i = 1; i <= n; i++) {
+    const q = pt(i / n);
+    E.seg(p[0], p[1], q[0], q[1], p[2], q[2], 0.85, 0, 0.05 + 0.6 * (i - 1) / n);
+    p = q;
+  }
+  for (const [u, rr, rank] of tp.drops) {
+    const a = pt(u), b = pt(u + 0.01), l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    E.drop(a[0], a[1], (b[0] - a[0]) / l, (b[1] - a[1]) / l, a[2], 0.7 + 1.3 * rr, rank * 0.8, 0.7);
+  }
+}
+function emitWeb(w, S, E) {
+  if (w.type === 'orb') emitOrb(w.tp, S, E);
+  else if (w.type === 'corner') emitCorner(w.tp, S, E);
+  else emitBridge(w.tp, S, E);
+}
+
+/* ======================================================================
+   Scene state, commit (morph to a new layout) / refresh (jump)
+   Each web: mode 0 = settled, 1 = being spun (reveal r0 -> 1), 2 = fading out (from alpha r0)
+   ====================================================================== */
+let WEBS = [], nextId = 1;
+let MOON = { A: null, B: null }, HANG = { A: null, B: null, vA: 0, vB: 0 };
+let shadeA = [], shadeB = [];
+let morphT0 = -1e9, morphDur = MORPH_MS, curMix = 1;
+let segCount = 0, dropCount = 0;
+const webRng = id => mulberry32(((seed * 7919) ^ (id * 104729)) >>> 0);
+function webState(w, m) {               // { spec, reveal } of a web at morph progress m
+  const spec = lerpSpec(w.A, w.B, m);
+  const e = sstep(0.05, 0.3, m);
+  const vis = w.mode === 0 ? 1 : w.mode === 1 ? w.r0 + (1 - w.r0) * m : w.r0 * (1 - e);
+  return { spec, vis };
+}
+function commit(fromEmpty = false, reseedAll = false) {
+  const t0 = performance.now();
+  const rects = obstacleRects();
+  const m = curMix, next = [], used = new Set();
+  const live = [];
+  for (const w of WEBS) {
+    const st = webState(w, m);
+    w.cur = st.spec; w.curV = st.vis;
+    if (w.mode === 2 && st.vis < 0.03) continue;
+    live.push(w);
+  }
+  const keepOrbs = fromEmpty || reseedAll ? [] : live.filter(w => w.type === 'orb' && w.mode !== 2).map(w => ({ cx: w.cur.cx, cy: w.cur.cy, R: w.cur.R, w }));
+  const plan = planScene(rects, keepOrbs);
+  const take = (w, B) => {
+    used.add(w);
+    w.A = w.cur; w.B = B;
+    if (w.mode === 1 && w.curV < 0.999) { w.r0 = w.curV; } else { w.mode = 0; w.r0 = 1; }
+    next.push(w);
+  };
+  const spawn = (type, tp, B, id) => { const w = { id, type, tp, A: B, B, mode: 1, r0: 0 }; next.push(w); return w; };
+  const pool = (fromEmpty || reseedAll) ? [] : live.filter(w => w.mode !== 2);
+  // orb webs: keep a web (and its spin pattern) when its new place is close and about the same size
+  const got = new Set();
+  plan.orbs.forEach((p, i) => { if (p.keep && !used.has(p.keep.w)) { got.add(i); take(p.keep.w, orbSpec(p.keep.w.tp, p, rects)); } });
+  const oldOrbs = pool.filter(w => w.type === 'orb' && !used.has(w)), pairs = [];
+  plan.orbs.forEach((p, i) => { if (!got.has(i)) oldOrbs.forEach(w => {
+    const c = w.cur, d = Math.hypot(p.cx - c.cx, p.cy - c.cy), mr = Math.max(p.R, c.R), ratio = p.R / c.R;
+    if (d < 0.6 * mr && ratio > 0.55 && ratio < 1.8) pairs.push([d / mr + Math.abs(Math.log(ratio)), i, w]);
+  }); });
+  pairs.sort((a, b) => a[0] - b[0]);
+  for (const [, i, w] of pairs) { if (got.has(i) || used.has(w)) continue; got.add(i); take(w, orbSpec(w.tp, plan.orbs[i], rects)); }
+  plan.orbs.forEach((p, i) => {
+    if (got.has(i)) return;
+    const id = nextId++, tp = newOrbTopo(webRng(id), p.R);
+    spawn('orb', tp, orbSpec(tp, p, rects), id);
+  });
+  // corner cobwebs: matched by corner
+  for (const p of plan.corners) {
+    const w = pool.find(o => o.type === 'corner' && o.tp.c === p.c && !used.has(o));
+    if (w) take(w, cornerSpec(p));
+    else { const id = nextId++; spawn('corner', newCornerTopo(webRng(id), p.c, p.R), cornerSpec(p), id); }
+  }
+  // strands between icons: matched by their end points
+  for (const p of plan.bridges) {
+    const w = pool.find(o => o.type === 'bridge' && !used.has(o) &&
+      ((Math.hypot(o.cur.x0 - p.x0, o.cur.y0 - p.y0) < 70 && Math.hypot(o.cur.x1 - p.x1, o.cur.y1 - p.y1) < 70) ||
+       (Math.hypot(o.cur.x0 - p.x1, o.cur.y0 - p.y1) < 70 && Math.hypot(o.cur.x1 - p.x0, o.cur.y1 - p.y0) < 70)));
+    if (w) {
+      const flip = Math.hypot(w.cur.x0 - p.x0, w.cur.y0 - p.y0) > Math.hypot(w.cur.x0 - p.x1, w.cur.y0 - p.y1);
+      take(w, flip ? { x0: p.x1, y0: p.y1, x1: p.x0, y1: p.y0 } : bridgeSpec(p));
+    } else { const id = nextId++; spawn('bridge', newBridgeTopo(webRng(id)), bridgeSpec(p), id); }
+  }
+  // everything else fades out quickly (an icon may have been dropped on it)
+  for (const w of live) if (!used.has(w)) { w.A = w.B = w.cur; w.r0 = w.curV; w.mode = 2; next.push(w); }
+  WEBS = next;
+  // moon and the dangling spider's strand glide to their new places
+  const curMoon = MOON.B ? [lerp(MOON.A[0], MOON.B[0], m), lerp(MOON.A[1], MOON.B[1], m)] : plan.moon;
+  MOON = { A: fromEmpty ? plan.moon : curMoon, B: plan.moon };
+  const hv = HANG.vA + (HANG.vB - HANG.vA) * m;
+  const curHang = HANG.B ? HANG.A.map((v, i) => lerp(v, HANG.B[i], m)) : (plan.hang || [W / 2, -4, 80]);
+  HANG = { A: curHang, B: plan.hang || curHang, vA: hv, vB: plan.hang ? 1 : 0 };
+  shadeA = fromEmpty ? [] : shadeB;
+  shadeB = icons.map(ic => [ic.x, ic.y, ic.w, ic.h]);
+  morphT0 = performance.now();
+  morphDur = fromEmpty ? 2600 : MORPH_MS;
+  curMix = 0;
+  buildBuffers();
+  geomMs = performance.now() - t0;
+}
+function refresh() {                              // re-fit without the morph (resize)
+  commit();
+  morphT0 = -1e9; curMix = 1;
+  for (const w of WEBS) if (w.mode === 1) w.r0 = 1;
+}
+
+/* ======================================================================
+   Shaders
+   ====================================================================== */
+const SWAY_GLSL = `
+uniform vec2 uSC[6];            // (sin, cos) of time x each breeze frequency, computed on the CPU in double precision
+uniform float uWind;
+float sn(int i, float ph) { return uSC[i].x * cos(ph) + uSC[i].y * sin(ph); }
+vec2 sway(vec2 b, float amp, float key) {
+  float g = 0.62 + 0.38 * sn(0, key * 1.7);
+  vec2 f = vec2(0.80 * sn(1, key) + 0.45 * sn(2, key * 2.3), 0.50 * sn(3, key * 1.7 + 1.3) + 0.30 * sn(4, key * 0.6));
+  float r = sn(5, b.x * 0.011 + b.y * 0.007 + key);
+  return amp * uWind * (f * g + vec2(0.18, 0.28) * r);
+}`;
+const SWF = [0.13, 0.53, 1.31, 0.71, 1.93, 2.1];
+function swayAt(x, y, amp, key, t) {             // CPU copy of sway(): keeps the spider on its thread
+  const S = (i, ph) => Math.sin(t * SWF[i] + ph);
+  const g = 0.62 + 0.38 * S(0, key * 1.7);
+  const fx = 0.80 * S(1, key) + 0.45 * S(2, key * 2.3), fy = 0.50 * S(3, key * 1.7 + 1.3) + 0.30 * S(4, key * 0.6);
+  const r = S(5, x * 0.011 + y * 0.007 + key), k = amp * P.wind;
+  return [k * (fx * g + 0.18 * r), k * (fy * g + 0.28 * r)];
+}
+
+const FULL_VS = `#version 300 es
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+// Background, rendered once per size / mood into a texture: gradient, low glow, out-of-focus foliage and bokeh, vignette
+const BG_FS = `#version 300 es
+precision highp float;
+uniform sampler2D uNoise;
+uniform vec2 uRes, uPx, uGlowP;
+uniform float uScale, uSeed, uFolAmt, uBokAmt, uVig;
+uniform vec3 uTop, uBot, uHorC, uFol, uBok;
+uniform vec4 uHor;          // y centre, height (fractions), strength, x centre
+out vec4 o;
+float hs(float n) { return fract(sin(n * 91.3458 + uSeed * 0.731) * 47453.5453); }
+float hp(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+float nz(vec2 p) { return texture(uNoise, p).r * 0.6 + texture(uNoise, p * 2.03 + 0.37).g * 0.28 + texture(uNoise, p * 4.07 + 0.71).b * 0.12; }
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, uPx.y - gl_FragCoord.y) / uScale;
+  vec2 uv = p / uRes;
+  float asp = uRes.x / uRes.y;
+  vec3 col = mix(uTop, uBot, smoothstep(-0.15, 1.1, uv.y));
+  float hy = (uv.y - uHor.x) / uHor.y, hx = (uv.x - uHor.w) * 0.9;
+  col += uHorC * uHor.z * exp(-hy * hy - hx * hx);
+  // far foliage: big soft blobs crowding the edges
+  vec2 e2 = vec2(min(uv.x, 1.0 - uv.x) * asp, min(uv.y, 1.0 - uv.y));
+  float edge = 1.0 - smoothstep(0.0, 0.45, min(e2.x, e2.y));
+  vec2 so = vec2(hs(1.0), hs(2.0)) * 7.0;
+  float n1 = nz(p / 1500.0 + so), n2 = nz(p / 650.0 + so.yx + 3.1);
+  float far = smoothstep(0.47, 0.72, n1 * 0.62 + n2 * 0.38 + edge * 0.32 - 0.07);
+  col = mix(col, uFol * (1.2 + 0.5 * n2), far * uFolAmt * 0.8);
+  // near leaves: large blurred leaf shapes along the edges
+  float lv = 0.0;
+  for (int i = 0; i < 24; i++) {
+    float fi = float(i) * 6.0 + 11.0;
+    float side = floor(hs(fi) * 4.0), a = hs(fi + 1.0), b = hs(fi + 2.0);
+    vec2 c = side < 1.0 ? vec2(a * uRes.x, (b * 0.16 - 0.05) * uRes.y)
+           : side < 2.0 ? vec2(a * uRes.x, (0.92 + b * 0.14) * uRes.y)
+           : side < 3.0 ? vec2((b * 0.1 - 0.03) * uRes.x, a * uRes.y)
+           : vec2((0.93 + b * 0.1) * uRes.x, a * uRes.y);
+    float s = mix(60.0, 200.0, hs(fi + 3.0)), an = hs(fi + 4.0) * 6.2832;
+    vec2 l = p - c; l = vec2(cos(an) * l.x + sin(an) * l.y, -sin(an) * l.x + cos(an) * l.y);
+    float el = length(vec2(l.x / s, l.y / (s * 0.42)));
+    lv = max(lv, (1.0 - smoothstep(0.45, 1.0, el)) * (0.45 + 0.55 * hs(fi + 5.0)));
+  }
+  col = mix(col, uFol * 0.42, lv * uFolAmt);
+  // bokeh: soft discs with a slightly brighter rim, more of them towards the light and the edges
+  float bk = 0.0;
+  for (int i = 0; i < 46; i++) {
+    float fi = float(i) * 7.0 + 300.0;
+    vec2 c = vec2(hs(fi), hs(fi + 1.0)) * uRes;
+    float r = mix(5.0, 34.0, pow(hs(fi + 2.0), 1.6));
+    float d = length(p - c);
+    float disc = 1.0 - smoothstep(r - 1.0 - r * 0.1, r + 1.0, d);
+    if (disc <= 0.0) continue;
+    vec2 cu = c / uRes; vec2 ce = vec2(min(cu.x, 1.0 - cu.x) * asp, min(cu.y, 1.0 - cu.y));
+    float w = (0.3 + 0.7 * hs(fi + 3.0)) * (0.35 + 0.65 * (1.0 - smoothstep(0.0, 0.35, min(ce.x, ce.y))));
+    w *= 0.6 + 1.2 * exp(-pow(length(c - uGlowP) / (0.35 * uRes.x), 2.0));
+    bk += disc * (0.6 + 0.4 * smoothstep(r * 0.5, r, d)) * w;
+  }
+  col += uBok * bk * uBokAmt * 0.1;
+  vec2 v = (uv - 0.5) * vec2(1.0, 1.1);
+  col *= 1.0 - uVig * smoothstep(0.25, 0.95, length(v) * 1.25);
+  col += (hp(gl_FragCoord.xy) - 0.5) / 255.0;
+  o = vec4(max(col, 0.0), 1.0);
+}`;
+
+// Per-frame full-screen composite: the cached background(s) plus drifting fog
+const COMP_FS = `#version 300 es
+precision highp float;
+uniform sampler2D uBgA, uBgB, uNoise;
+uniform vec2 uRes, uPx;
+uniform float uScale, uBgK, uFog;
+uniform vec3 uFogC;
+uniform vec4 uFogO;
+out vec4 o;
+void main() {
+  ivec2 ip = ivec2(gl_FragCoord.xy);
+  vec3 col = mix(texelFetch(uBgA, ip, 0).rgb, texelFetch(uBgB, ip, 0).rgb, uBgK);
+  if (uFog > 0.003) {
+    vec2 p = vec2(gl_FragCoord.x, uPx.y - gl_FragCoord.y) / uScale;
+    float f = texture(uNoise, p / 1500.0 + uFogO.xy).r * 0.6 + texture(uNoise, p / 620.0 + uFogO.zw).g * 0.4;
+    float fa = smoothstep(0.3, 0.82, f) * uFog;
+    col = mix(col, uFogC, fa * (0.16 + 0.2 * p.y / uRes.y));
+  }
+  o = vec4(col, 1.0);
+}`;
+
+// Soft shade under the icons (old and new positions cross-fade): white labels stay readable
+const SHADE_VS = `#version 300 es
+in vec4 aR; in float aK;
+uniform vec2 uRes; uniform float uMix;
+out vec2 vL; out vec2 vH; out float vA;
+void main() {
+  vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
+  vH = aR.zw * 0.5;
+  vL = c * (vH + 30.0);
+  vA = aK > 0.5 ? uMix : 1.0 - uMix;
+  vec2 p = aR.xy + vH + vL;
+  vec2 q = p / uRes * 2.0 - 1.0;
+  gl_Position = vec4(q.x, -q.y, 0.0, 1.0);
+}`;
+const SHADE_FS = `#version 300 es
+precision highp float;
+in vec2 vL; in vec2 vH; in float vA;
+uniform float uShade;
+out vec4 o;
+void main() {
+  vec2 q = abs(vL) - max(vH - 22.0, 0.0);
+  float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - 22.0;
+  float a = uShade * vA * (1.0 - smoothstep(-26.0, 28.0, d));
+  o = vec4(0.0, 0.0, 0.0, a);
+}`;
+
+// Silk: one instanced thin quad per thread segment; the vertex shader blends the two layouts and adds the breeze
+const SILK_VS = `#version 300 es
+in vec4 aA; in vec4 aB; in vec4 aM; in vec4 aF; in vec2 aG;
+uniform vec2 uRes;
+uniform float uScale, uMix;
+${SWAY_GLSL}
+out float vX; out float vHW; out float vA; out float vThin; out float vKind;
+out vec2 vT; out vec2 vP;
+void main() {
+  int id = gl_VertexID;
+  float s = float(id & 1), side = float(id >> 1) * 2.0 - 1.0;
+  // reveal: 0 settled, 1 being spun (r0 -> 1), 2 fading out (from r0)
+  float mode = aF.y, born = aF.z, a = 1.0;
+  if (mode > 1.5) a = aF.x * (1.0 - smoothstep(born, born + 0.16, uMix));
+  else if (mode > 0.5) a = smoothstep(born, born + 0.16, aF.x + (1.0 - aF.x) * uMix);
+  vec2 b0 = mix(aA.xy, aB.xy, uMix), b1 = mix(aA.zw, aB.zw, uMix);
+  vec2 p0 = b0 + sway(b0, mix(aM.x, aM.z, uMix), aF.w);
+  vec2 p1 = b1 + sway(b1, mix(aM.y, aM.w, uMix), aF.w);
+  vec2 d = p1 - p0; float len = length(d);
+  a *= smoothstep(0.2, 1.2, len);
+  if (a < 0.002) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  vec2 T = d / len, N = vec2(-T.y, T.x);
+  float wd = aG.x * uScale, hw = max(wd, 1.0) * 0.5, pad = hw + 2.0;
+  vec2 p = mix(p0, p1, s) + T * (s * 2.0 - 1.0) * (0.5 / uScale) + N * side * (pad / uScale);
+  vX = side * pad; vHW = hw; vThin = min(wd, 1.0); vA = a; vT = T; vP = p; vKind = aG.y;
+  vec2 c = p / uRes * 2.0 - 1.0;
+  gl_Position = vec4(c.x, -c.y, 0.0, 1.0);
+}`;
+const SILK_FS = `#version 300 es
+precision highp float;
+in float vX; in float vHW; in float vA; in float vThin; in float vKind;
+in vec2 vT; in vec2 vP;
+uniform vec2 uLight;
+uniform vec3 uSilk, uHi;
+uniform float uBase, uShim, uReach;
+out vec4 o;
+void main() {
+  float d = abs(vX);
+  float core = clamp(vHW + 0.5 - d, 0.0, 1.0) * vThin;
+  vec2 L = vP - uLight; float dl = length(L); L /= max(dl, 1e-3);
+  // a thread lights up where it runs across the line to the light: the classic bright streak through a backlit web
+  float perp = 1.0 - abs(dot(vT, L));
+  float hl = pow(perp, 10.0) * 0.65 + pow(perp, 70.0) * 1.1;
+  hl *= 0.55 + 0.45 * sin(dot(vP, vec2(0.0105, 0.0071)) - uShim);            // slow sheen travelling across the silk
+  if (vKind < 0.5) hl *= 0.7;                                                  // dry structural silk is less glossy
+  float near = 1.0 / (1.0 + dl * dl * uReach);
+  float base = vKind > 0.5 && vKind < 1.5 ? 0.40 : vKind > 1.5 ? 0.36 : 0.36;
+  float I = core * (base * uBase * (0.7 + 0.6 * near) + hl * (0.5 + 0.9 * near)) + exp(-d * d * 0.4) * hl * 0.14 * vThin;
+  I *= vA;
+  vec3 c = mix(uSilk, uHi, clamp(hl * 1.5, 0.0, 1.0));
+  o = vec4(c * I, I * 0.75);
+}`;
+
+// Dew drops: tiny lenses on the capture threads; some glint (with a soft four-point sparkle) when the light catches them
+const DEW_VS = `#version 300 es
+in vec4 aA; in vec4 aM; in vec4 aF; in vec2 aT;
+uniform vec2 uRes, uLight;
+uniform float uScale, uMix, uDew, uDewSize, uTw;
+${SWAY_GLSL}
+out vec2 vQ; out float vR; out float vA; out float vG; out vec2 vL;
+void main() {
+  vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
+  float rank = aM.w, mode = aF.y, born = aF.z, a = 1.0;
+  if (mode > 1.5) a = aF.x * (1.0 - smoothstep(born, born + 0.16, uMix));
+  else if (mode > 0.5) a = smoothstep(born, born + 0.16, aF.x + (1.0 - aF.x) * uMix);
+  a *= 1.0 - smoothstep(uDew - 0.03, uDew, rank);
+  if (a < 0.003) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  vec2 b = mix(aA.xy, aA.zw, uMix);
+  vec2 p = b + sway(b, mix(aM.x, aM.y, uMix), aM.z);
+  float r = max(aF.w * uDewSize * uScale, 0.55);
+  float ext = r * 2.5 + 5.0;
+  vQ = c * ext; vR = r;
+  vec2 L = normalize(p - uLight);
+  float hl = pow(1.0 - abs(dot(aT, L)), 8.0);
+  float tw = pow(0.5 + 0.5 * sin(uTw * (0.45 + rank * 1.6) + rank * 91.0), 14.0);
+  vG = hl * tw; vL = -L; vA = a;
+  vec2 q = (p + vQ / uScale) / uRes * 2.0 - 1.0;
+  gl_Position = vec4(q.x, -q.y, 0.0, 1.0);
+}`;
+const DEW_FS = `#version 300 es
+precision highp float;
+in vec2 vQ; in float vR; in float vA; in float vG; in vec2 vL;
+uniform vec3 uSilk, uHi;
+uniform float uDewB;
+out vec4 o;
+void main() {
+  float d = length(vQ);
+  float body = 1.0 - smoothstep(vR - 0.6, vR + 0.6, d);
+  vec2 q = vQ / vR;
+  float lens = 0.22 + 0.32 * smoothstep(-1.0, 1.0, -dot(q, vL));             // refracted light gathers on the far side
+  vec2 hp = q - vL * 0.42;
+  float spec = exp(-dot(hp, hp) * 8.0);
+  float rim = smoothstep(0.5, 1.0, d / vR) * 0.22;
+  vec2 rq = mat2(0.7071, -0.7071, 0.7071, 0.7071) * vQ;
+  float len = vR * 2.6 + 2.5;
+  float star = exp(-abs(rq.x) * 1.5) * exp(-abs(rq.y) / len) + exp(-abs(rq.y) * 1.5) * exp(-abs(rq.x) / len);
+  float I = body * (lens + rim + spec * (0.7 + 2.2 * vG)) + vG * (star * 0.75 + exp(-d * d / (vR * vR * 5.0)) * 0.6);
+  I *= vA * uDewB;
+  vec3 c = mix(uSilk, uHi, clamp(spec + vG, 0.0, 1.0));
+  o = vec4(c * I, min(I, 1.0) * 0.55);
+}`;
+
+// Sprites: kind 0 spider, 1 bat, 2 moon (with its glow). Local frame: +x = heading, units scaled by aP.z
+const SPR_VS = `#version 300 es
+in vec4 aP; in vec4 aQ;
+uniform vec2 uRes, uLight;
+uniform float uScale;
+out vec2 vQ; out vec2 vLd; out float vKind; out float vPh; out float vA; out float vPx;
+void main() {
+  vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
+  vQ = c * aQ.w;
+  float ca = cos(aP.w), sa = sin(aP.w);
+  vec2 p = aP.xy + vec2(ca * vQ.x - sa * vQ.y, sa * vQ.x + ca * vQ.y) * aP.z;
+  vec2 L = uLight - aP.xy; L /= max(length(L), 1e-3);
+  vLd = vec2(ca * L.x + sa * L.y, -sa * L.x + ca * L.y);
+  vKind = aQ.x; vPh = aQ.y; vA = aQ.z; vPx = 1.0 / (aP.z * uScale);
+  vec2 q = p / uRes * 2.0 - 1.0;
+  gl_Position = vec4(q.x, -q.y, 0.0, 1.0);
+}`;
+const SPR_FS = `#version 300 es
+precision highp float;
+in vec2 vQ; in vec2 vLd; in float vKind; in float vPh; in float vA; in float vPx;
+uniform vec3 uRim, uMoonC, uMark;
+uniform float uMoonK, uGlowK, uGlowR, uMark2;
+out vec4 o;
+float sdSeg(vec2 p, vec2 a, vec2 b) { vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0); return length(pa - ba * h); }
+float sdEll(vec2 p, vec2 r) { float k0 = length(p / r), k1 = length(p / (r * r)); return k0 * (k0 - 1.0) / max(k1, 1e-4); }
+vec4 spider(vec2 q) {
+  float aa = vPx;
+  // legs: four per side, femur and tibia, alternating tetrapod gait
+  float dl = 1e9, tl = 0.0;
+  for (int s = 0; s < 2; s++) {
+    float sg = s == 0 ? 1.0 : -1.0;
+    vec2 qq = vec2(q.x, q.y * sg);
+    for (int i = 0; i < 4; i++) {
+      float fi = float(i);
+      float L = i == 0 ? 10.5 : i == 1 ? 9.0 : i == 2 ? 6.4 : 8.0;
+      float a = radians(32.0 + fi * 38.0) + sin(vPh + mod(fi + float(s), 2.0) * 3.14159) * 0.2;
+      vec2 o0 = vec2(2.3 - fi * 0.55, 0.85);
+      float af = mix(a, 1.5708, 0.35), at = a + (a - 1.5708) * 0.3;
+      vec2 k = o0 + vec2(cos(af), sin(af)) * L * 0.46;
+      vec2 t = k + vec2(cos(at), sin(at)) * L * 0.6;
+      float d1 = sdSeg(qq, o0, k) - 0.48, d2 = sdSeg(qq, k, t) - 0.32;
+      if (d2 < dl && d2 < d1) { vec2 pa = qq - k, ba = t - k; tl = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0); }
+      dl = min(dl, min(d1, d2));
+    }
+  }
+  vec2 cc = vec2(1.6, 0.0), ac = vec2(-3.5, 0.0);
+  float dc = sdEll(q - cc, vec2(2.3, 1.85)), da = sdEll(q - ac, vec2(4.0, 3.3));
+  float legA = 1.0 - smoothstep(-aa, aa, dl);
+  float bodyA = 1.0 - smoothstep(-aa, aa, min(dc, da));
+  float A = max(legA, bodyA);
+  if (A <= 0.0) return vec4(0.0);
+  vec3 legC = mix(vec3(0.075, 0.065, 0.06), vec3(0.32, 0.28, 0.24), step(0.55, fract(tl * 2.5)) * 0.8);
+  // abdomen: dark with a paler folium pattern down the back and a glossy highlight towards the light
+  vec2 qa = q - ac;
+  float fol = 1.0 - smoothstep(-0.25, 0.25, abs(qa.y) - (1.15 + 0.45 * sin(qa.x * 2.6 + 0.6)) * smoothstep(-4.2, -1.0, qa.x) * smoothstep(3.6, 1.0, qa.x));
+  vec3 abd = mix(vec3(0.16, 0.12, 0.09), vec3(0.45, 0.38, 0.30), fol * 0.75);
+  abd = mix(abd, uMark, uMark2 * fol * 0.85);
+  vec3 cep = vec3(0.12, 0.10, 0.085);
+  vec3 bc = da < dc ? abd : cep;
+  vec2 nrm = da < dc ? qa / vec2(4.0, 3.3) : (q - cc) / vec2(2.3, 1.85);
+  float rim = smoothstep(0.55, 1.0, length(nrm)) * max(dot(normalize(nrm + 1e-4), vLd), 0.0);
+  float spec = exp(-dot(nrm - vLd * 0.5, nrm - vLd * 0.5) * 7.0);
+  bc += uRim * (rim * 0.55 + spec * 0.35);
+  vec3 col = bodyA > 0.0 ? mix(legC, bc, bodyA) : legC;
+  return vec4(col * A, A);
+}
+vec4 bat(vec2 q, float blur) {
+  float aa = vPx * (1.0 + blur * 5.0);
+  vec2 p = vec2(abs(q.x), q.y);
+  float fl = sin(vPh);
+  float db = sdEll(q - vec2(0.0, 0.4), vec2(1.3, 2.4));
+  float dh = length(q - vec2(0.0, -1.9)) - 1.15;
+  float de = sdSeg(p, vec2(0.55, -2.5), vec2(0.95, -3.7)) - 0.35;
+  float span = 11.5 * (0.8 + 0.2 * abs(cos(vPh)));
+  float t = clamp((p.x - 0.6) / (span - 0.6), 0.0, 1.0);
+  float top = -0.6 - 2.2 * sin(t * 2.6) * (1.0 - 0.3 * fl) - fl * 4.5 * t * t;
+  float bot = top + mix(4.0, 0.5, t) - 1.5 * pow(abs(sin(t * 3.14159 * 2.5)), 0.6) * t;
+  float dw = max(max(top - p.y, p.y - bot), p.x - span);
+  float d = min(min(db, dh), min(de, dw));
+  float A = 1.0 - smoothstep(-aa, aa, d);
+  vec3 col = vec3(0.03, 0.018, 0.04);
+  return vec4(col * A, A);
+}
+void main() {
+  vec4 c;
+  if (vKind < 0.5) c = spider(vQ);
+  else if (vKind < 1.9) c = bat(vQ, (vKind - 1.0) * 2.0);
+  else {
+    // moon: an out-of-focus disc with faint markings, a close halo and a broad glow (additive)
+    float d = length(vQ);
+    float disc = 1.0 - smoothstep(0.86, 1.04, d);
+    float mar = 0.9 + 0.1 * sin(vQ.x * 4.3 + 1.1) * sin(vQ.y * 3.7 - 0.4);
+    float halo = exp(-max(d - 1.0, 0.0) * 1.6) * 0.32 * (1.0 - disc);
+    float gd = d / uGlowR;
+    float glow = uGlowK * (exp(-gd * gd * 2.2) * 0.75 + 0.25 / (1.0 + gd * gd * 6.0));
+    vec3 col = uMoonC * (disc * mar * uMoonK + halo * uMoonK + glow);
+    o = vec4(col * vA, 0.0);
+    return;
+  }
+  o = c * vA;
+}`;
+
+/* ======================================================================
+   WebGL
+   ====================================================================== */
+const cv = document.getElementById('art');
+const gl = cv.getContext('webgl2', { antialias: false });
+if (!gl) document.getElementById('nogl').style.display = 'grid';
+function program(vs, fs) {
+  const mk = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); throw new Error('shader'); }
+    return s;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, mk(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) console.error(gl.getProgramInfoLog(p));
+  const U = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i).name.replace(/\[0\]$/, ''); U[nm] = gl.getUniformLocation(p, nm); }
+  return { p, U };
+}
+function instVAO(prog, layout) {                 // one buffer, per-instance attributes
+  const vao = gl.createVertexArray(), buf = gl.createBuffer();
+  gl.bindVertexArray(vao); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  const floats = layout.reduce((a, l) => a + l[1], 0);
+  let off = 0;
+  for (const [name, size] of layout) {
+    const loc = gl.getAttribLocation(prog.p, name);
+    if (loc >= 0) { gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, floats * 4, off * 4); gl.vertexAttribDivisor(loc, 1); }
+    off += size;
+  }
+  gl.bindVertexArray(null);
+  return { vao, buf, floats, n: 0 };
+}
+let BGP, CMP, SHP, SKP, DWP, SPP, emptyVAO, silkV, dynV, dewV, shadeV, sprV;
+const SILK_LAYOUT = [['aA', 4], ['aB', 4], ['aM', 4], ['aF', 4], ['aG', 2]];
+if (gl) {
+  BGP = program(FULL_VS, BG_FS);
+  CMP = program(FULL_VS, COMP_FS);
+  SHP = program(SHADE_VS, SHADE_FS);
+  SKP = program(SILK_VS, SILK_FS);
+  DWP = program(DEW_VS, DEW_FS);
+  SPP = program(SPR_VS, SPR_FS);
+  emptyVAO = gl.createVertexArray();
+  silkV = instVAO(SKP, SILK_LAYOUT);
+  dynV = instVAO(SKP, SILK_LAYOUT);
+  dewV = instVAO(DWP, [['aA', 4], ['aM', 4], ['aF', 4], ['aT', 2]]);
+  shadeV = instVAO(SHP, [['aR', 4], ['aK', 1]]);
+  sprV = instVAO(SPP, [['aP', 4], ['aQ', 4]]);
+}
+function upload(v, data, n, usage) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, v.buf);
+  gl.bufferData(gl.ARRAY_BUFFER, data, usage || gl.STATIC_DRAW);
+  v.n = n;
+}
+// Interleave each web's "from" (A) and "to" (B) geometry into the instance buffers
+function buildBuffers() {
+  const S = [], D = [];
+  for (const w of WEBS) {
+    const EB = new Em(); emitWeb(w, w.B, EB);
+    let EA = EB;
+    if (w.A !== w.B) { EA = new Em(); emitWeb(w, w.A, EA); }
+    const key = w.tp.key, r0 = w.r0, mode = w.mode;
+    const ns = EB.s.length / 9;
+    for (let i = 0; i < ns; i++) {
+      const a = i * 9, sa = EA.s, sb = EB.s;
+      const born = mode === 2 ? 0.1 * fract(i * 0.6180339) : sb[a + 8];
+      S.push(sa[a], sa[a + 1], sa[a + 2], sa[a + 3], sb[a], sb[a + 1], sb[a + 2], sb[a + 3],
+        sa[a + 4], sa[a + 5], sb[a + 4], sb[a + 5], r0, mode, born, key, sb[a + 6], sb[a + 7]);
+    }
+    const nd = EB.d.length / 8;
+    for (let i = 0; i < nd; i++) {
+      const a = i * 8, da = EA.d, db = EB.d;
+      const born = mode === 2 ? 0.1 * fract(i * 0.6180339) : db[a + 7];
+      D.push(da[a], da[a + 1], db[a], db[a + 1], da[a + 4], db[a + 4], key, db[a + 6], r0, mode, born, db[a + 5], db[a + 2], db[a + 3]);
+    }
+  }
+  segCount = S.length / 18; dropCount = D.length / 14;
+  if (!gl) return;
+  upload(silkV, new Float32Array(S), segCount);
+  upload(dewV, new Float32Array(D), dropCount);
+  const sh = [];
+  for (const r of shadeA) sh.push(r[0], r[1], r[2], r[3], 0);
+  for (const r of shadeB) sh.push(r[0], r[1], r[2], r[3], 1);
+  upload(shadeV, new Float32Array(sh), sh.length / 5);
+}
+
+let noiseTex = null;
+function buildNoiseTex() {
+  const { S, d } = makeNoiseImage();
+  noiseTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, noiseTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, S, S, 0, gl.RGBA, gl.UNSIGNED_BYTE, d);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+}
+
+/* ======================================================================
+   Moods
+   ====================================================================== */
+const MOODS = [
+  { // Moonlit: cool blue night
+    top: [0.062, 0.082, 0.112], bot: [0.026, 0.033, 0.046], horC: [0.10, 0.15, 0.24], hor: [1.05, 0.34, 0.22, 0.45],
+    fol: [0.062, 0.094, 0.108], folAmt: 0.85, bok: [0.55, 0.70, 0.95], bokAmt: 1.0, vig: 0.55,
+    moonC: [0.80, 0.87, 1.0], moonR: 30, moonK: 0.62, glowK: 0.22, glowR: 15,
+    silk: [0.66, 0.74, 0.86], hi: [0.92, 0.96, 1.0], base: 1.0, reach: 1.2e-6,
+    fogC: [0.24, 0.30, 0.40], fog: 0.22, dew: 0.62, dewSize: 1.0, dewB: 1.0, shade: 0.12, spooky: 0,
+    rim: [0.55, 0.62, 0.75], mark: [0, 0, 0], mark2: 0,
+  },
+  { // Misty dawn: soft warm-grey fog, heavy dew, pale light
+    top: [0.37, 0.355, 0.34], bot: [0.215, 0.205, 0.20], horC: [0.42, 0.34, 0.28], hor: [1.0, 0.42, 0.16, 0.5],
+    fol: [0.15, 0.155, 0.145], folAmt: 0.75, bok: [1.0, 0.93, 0.82], bokAmt: 0.55, vig: 0.42,
+    moonC: [1.0, 0.92, 0.80], moonR: 58, moonK: 0.16, glowK: 0.24, glowR: 9,
+    silk: [0.86, 0.85, 0.83], hi: [1.0, 0.98, 0.93], base: 1.08, reach: 0.8e-6,
+    fogC: [0.60, 0.575, 0.55], fog: 1.0, dew: 1.0, dewSize: 1.35, dewB: 1.15, shade: 0.17, spooky: 0,
+    rim: [0.7, 0.66, 0.6], mark: [0, 0, 0], mark2: 0,
+  },
+  { // Halloween: deep purple night, orange glow
+    top: [0.085, 0.036, 0.12], bot: [0.042, 0.018, 0.04], horC: [0.95, 0.36, 0.07], hor: [1.06, 0.30, 0.30, 0.55],
+    fol: [0.028, 0.014, 0.036], folAmt: 0.92, bok: [1.0, 0.58, 0.24], bokAmt: 0.85, vig: 0.6,
+    moonC: [1.0, 0.64, 0.30], moonR: 42, moonK: 0.75, glowK: 0.2, glowR: 11,
+    silk: [0.80, 0.73, 0.92], hi: [1.0, 0.84, 0.62], base: 1.15, reach: 1.2e-6,
+    fogC: [0.28, 0.10, 0.26], fog: 0.3, dew: 0.48, dewSize: 1.0, dewB: 1.0, shade: 0.13, spooky: 1,
+    rim: [0.9, 0.55, 0.3], mark: [0.95, 0.45, 0.08], mark2: 1,
+  },
+];
+function lerpPal(a, b, t) {
+  const o = {};
+  for (const k in a) o[k] = Array.isArray(a[k]) ? a[k].map((v, i) => v + (b[k][i] - v) * t) : a[k] + (b[k] - a[k]) * t;
+  return o;
+}
+let moodFrom = -1, moodTo = -1, moodT0 = -1e9;
+const BGS = [{ tex: null, fb: null, mood: -1, w: 0, h: 0 }, { tex: null, fb: null, mood: -1, w: 0, h: 0 }];
+let cacheOK = false, bakeMs = 0;
+function bakeBg(slot, mood) {
+  const t0 = performance.now();
+  const b = BGS[slot], w = cv.width, h = cv.height, M = MOODS[mood];
+  if (!b.tex || b.w !== w || b.h !== h) {
+    if (b.tex) { gl.deleteTexture(b.tex); gl.deleteFramebuffer(b.fb); }
+    b.tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, b.tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    b.fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, b.fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, b.tex, 0);
+    b.w = w; b.h = h;
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, b.fb);
+  gl.viewport(0, 0, w, h);
+  gl.disable(gl.BLEND);
+  const { p, U } = BGP;
+  gl.useProgram(p);
+  gl.bindVertexArray(emptyVAO);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, noiseTex); gl.uniform1i(U.uNoise, 0);
+  gl.uniform2f(U.uRes, w / cv._scale, h / cv._scale);
+  gl.uniform2f(U.uPx, w, h);
+  const mp = MOON.B || [W * 0.8, H * 0.16];
+  gl.uniform2f(U.uGlowP, mp[0], mp[1]);
+  gl.uniform1f(U.uScale, cv._scale);
+  gl.uniform1f(U.uSeed, (seed % 997) * 0.37);
+  gl.uniform1f(U.uFolAmt, M.folAmt); gl.uniform1f(U.uBokAmt, M.bokAmt); gl.uniform1f(U.uVig, M.vig);
+  gl.uniform3f(U.uTop, ...M.top); gl.uniform3f(U.uBot, ...M.bot); gl.uniform3f(U.uHorC, ...M.horC);
+  gl.uniform3f(U.uFol, ...M.fol); gl.uniform3f(U.uBok, ...M.bok);
+  gl.uniform4f(U.uHor, ...M.hor);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  b.mood = mood;
+  bakeMs = performance.now() - t0;
+}
+function slotOf(mood) {
+  for (let i = 0; i < 2; i++) if (BGS[i].mood === mood && BGS[i].w === cv.width && BGS[i].h === cv.height) return i;
+  return -1;
+}
+// Keep a baked background for the current mood (and the one it fades from)
+function ensureBackgrounds(now) {
+  if (moodTo < 0) { moodFrom = moodTo = P.mood; moodT0 = -1e9; }
+  if (P.mood !== moodTo) { moodFrom = moodProgress(now) < 0.5 ? moodFrom : moodTo; moodTo = P.mood; moodT0 = now; }
+  if (!cacheOK) { BGS[0].mood = BGS[1].mood = -1; cacheOK = true; }
+  if (slotOf(moodTo) < 0) {
+    const keep = moodFrom !== moodTo ? slotOf(moodFrom) : -1;
+    bakeBg(keep === 0 ? 1 : 0, moodTo);
+  }
+  if (moodFrom !== moodTo && slotOf(moodFrom) < 0) moodFrom = moodTo;
+}
+const moodProgress = now => sstep(0, 1, (now - moodT0) / 1400);
+
+/* ======================================================================
+   The spider: rests head-down at a hub, now and then walks out along a radius and back
+   ====================================================================== */
+const SP = { web: null, mode: 'gone', j: 0, rho: 0, target: 0, timer: 2.5, ang: Math.PI / 2, leg: 0, a: 0, stop: 0 };
+function orbVis(w) { return w ? webState(w, curMix).vis : 0; }
+function pickSpiderWeb() {
+  const orbs = WEBS.filter(w => w.type === 'orb' && w.mode !== 2).sort((a, b) => b.B.R - a.B.R);
+  if (!orbs.length) return null;
+  return orbs[Math.floor(Math.random() * Math.min(3, orbs.length))];
+}
+function turnTo(a, b, k) { let d = normA(b - a + Math.PI) - Math.PI; return a + d * Math.min(1, k); }
+function stepSpider(dt) {
+  const w = SP.web;
+  if (w && (w.mode === 2 || !WEBS.includes(w)) && SP.mode !== 'gone') SP.mode = 'leave';
+  if (!P.showSpider && SP.mode !== 'gone') SP.mode = 'leave';
+  const L = w ? lerp(w.A.L[SP.j], w.B.L[SP.j], curMix) : 1;
+  const walk = dir => {
+    if (SP.stop > 0) { SP.stop -= dt; return; }
+    if (Math.random() < dt * 0.12) SP.stop = 0.4 + Math.random() * 1.4;           // little pauses on the way
+    const v = 8 * (0.55 + 0.45 * Math.abs(Math.sin(SP.leg * 0.5)));
+    SP.rho += dir * v * dt / Math.max(L, 1);
+    SP.leg += v * dt * 0.75;
+  };
+  switch (SP.mode) {
+    case 'gone':
+      SP.a = Math.max(0, SP.a - dt * 1.5);
+      SP.timer -= dt;
+      if (SP.timer <= 0 && P.showSpider) {
+        const nw = pickSpiderWeb();
+        if (nw && orbVis(nw) > 0.95) { SP.web = nw; SP.mode = 'rest'; SP.rho = 0; SP.j = 0; SP.ang = Math.PI / 2; SP.timer = 6 + Math.random() * 14; }
+        else SP.timer = 1;
+      }
+      break;
+    case 'leave':
+      SP.a -= dt * 1.5;
+      if (SP.a <= 0) { SP.a = 0; SP.mode = 'gone'; SP.web = null; SP.timer = 4 + Math.random() * 4; }
+      break;
+    case 'rest':
+      SP.a = Math.min(1, SP.a + dt * 0.8);
+      SP.ang = turnTo(SP.ang, Math.PI / 2, dt * 1.5);                             // orb weavers hang head down at the hub
+      SP.leg += dt * 0.25 * (Math.sin(performance.now() / 2300) > 0.97 ? 8 : 0);  // the odd leg adjustment
+      if ((SP.timer -= dt) <= 0) {
+        let j = Math.floor(Math.random() * w.tp.N);
+        if (j === w.tp.miss) j = (j + 1) % w.tp.N;
+        SP.j = j; SP.rho = 0; SP.target = 0.55 + Math.random() * 0.33; SP.mode = 'out';
+      }
+      break;
+    case 'out':
+      SP.a = Math.min(1, SP.a + dt * 0.8);
+      SP.ang = turnTo(SP.ang, w.tp.phi[SP.j], dt * 3);
+      walk(1);
+      if (SP.rho >= SP.target) { SP.rho = SP.target; SP.mode = 'pause'; SP.timer = 3 + Math.random() * 7; }
+      break;
+    case 'pause':
+      if ((SP.timer -= dt) <= 0) SP.mode = 'in';
+      break;
+    case 'in':
+      SP.ang = turnTo(SP.ang, w.tp.phi[SP.j] + Math.PI, dt * 3);
+      walk(-1);
+      if (SP.rho <= 0) { SP.rho = 0; SP.mode = 'rest'; SP.timer = 25 + Math.random() * 50; }
+      break;
+  }
+}
+function spiderPose(t) {
+  const w = SP.web;
+  if (!w || SP.a <= 0.003) return null;
+  const m = curMix, A = w.A, B = w.B, j = SP.j;
+  const hx = lerp(A.hx, B.hx, m), hy = lerp(A.hy, B.hy, m), L = lerp(A.L[j], B.L[j], m), amp = lerp(A.amp, B.amp, m);
+  const r = L * SP.rho, x = hx + w.tp.cs[j] * r, y = hy + w.tp.sn[j] * r;
+  const s = swayAt(x, y, amp * (1 - 0.85 * SP.rho * SP.rho), w.tp.key, t);
+  return [x + s[0], y + s[1], SP.ang, SP.a * Math.min(1, orbVis(w) * 1.2)];
+}
+
+/* ======================================================================
+   Halloween extras: bats drifting across, a spider dangling on a strand
+   ====================================================================== */
+let BATS = [], batTimer = 3;
+function stepBats(dt, spooky) {
+  batTimer -= dt;
+  if (spooky > 0.5 && batTimer <= 0 && BATS.length < 3) {
+    const dir = Math.random() < 0.5 ? 1 : -1, size = 1.2 + Math.random() * 0.9;
+    const my = MOON.B ? MOON.B[1] : H * 0.2;                 // fly past the moon, where the silhouette shows
+    BATS.push({ x: dir > 0 ? -40 : W + 40, y: clamp(my + (Math.random() - 0.5) * H * 0.35, H * 0.05, H * 0.7), vx: dir * (45 + 40 * Math.random()) * (0.7 + 0.3 * size),
+      size, ph: Math.random() * TAU, rate: 10 + 4 * Math.random(), bob: Math.random() * TAU, blur: clamp(1.6 - size, 0, 0.5) });
+    batTimer = 9 + Math.random() * 22;
+  }
+  for (const b of BATS) { b.x += b.vx * dt; b.ph += b.rate * dt; b.bob += dt * 0.9; }
+  BATS = BATS.filter(b => b.x > -80 && b.x < W + 80);
+}
+
+/* ======================================================================
+   Desktop icons (DOM)
+   ====================================================================== */
+const desktop = document.getElementById('desktop');
+let icons = [], layoutKind = 'mine', selected = null, drag = null, extraIdx = 0, layoutCapacity = 0;
+const grid = { cols: 1, rows: 1 };
+let DW = innerWidth, DH = innerHeight - TASKBAR;
+function computeGrid() {
+  DW = innerWidth; DH = innerHeight - TASKBAR;
+  grid.cols = Math.max(1, Math.floor((DW - GRID_X0) / CELL_W));
+  grid.rows = Math.max(1, Math.floor((DH - GRID_Y0) / CELL_H));
+}
+const cellPos = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H });
+const occupied = (x, y, self) => icons.some(ic => ic !== self && Math.abs(ic.x - x) < CELL_W / 2 && Math.abs(ic.y - y) < CELL_H / 2);
+function nearestFreeCell(cx, cy, self) {
+  let best = null, bd = Infinity;
+  for (let c = 0; c < grid.cols; c++) for (let r = 0; r < grid.rows; r++) {
+    const pos = cellPos(c, r);
+    if (occupied(pos.x, pos.y, self)) continue;
+    const dd = Math.hypot(pos.x + CELL_W / 2 - cx, pos.y + CELL_H / 2 - cy);
+    if (dd < bd) { bd = dd; best = pos; }
+  }
+  return best;
+}
+function addIcon([name, type], pos, born = false) {
+  const el = document.createElement('div');
+  el.className = 'icon' + (born ? ' born' : '');
+  el.innerHTML = `<div class="glyph"><svg viewBox="0 0 48 48">${glyphOf(name, type)}</svg></div><div class="label"></div>`;
+  el.querySelector('.label').textContent = name;
+  el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px';
+  desktop.appendChild(el);
+  const ic = { name, type, x: pos.x, y: pos.y, w: el.offsetWidth, h: el.offsetHeight, el };
+  icons.push(ic); bindDrag(ic);
+  return ic;
+}
+function setPos(ic, x, y) { ic.x = x; ic.y = y; ic.el.style.left = x + 'px'; ic.el.style.top = y + 'px'; }
+function select(ic) {
+  if (selected) selected.el.classList.remove('sel');
+  selected = ic;
+  if (ic) ic.el.classList.add('sel');
+}
+function bindDrag(ic) {
+  const el = ic.el;
+  el.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.stopPropagation(); select(ic);
+    el.setPointerCapture(e.pointerId); el.classList.remove('settle');
+    drag = { ic, sx: e.clientX, sy: e.clientY, ox: ic.x, oy: ic.y, moved: false };
+  });
+  el.addEventListener('pointermove', e => {
+    if (!drag || drag.ic !== ic) return;
+    const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true; el.classList.add('drag');
+    el.style.left = drag.ox + dx + 'px'; el.style.top = drag.oy + dy + 'px';
+  });
+  const end = (e, cancel) => {
+    if (!drag || drag.ic !== ic) return;
+    const d = drag; drag = null;
+    el.classList.remove('drag');
+    if (!d.moved) return;
+    let nx = cancel ? d.ox : d.ox + (e.clientX - d.sx), ny = cancel ? d.oy : d.oy + (e.clientY - d.sy);
+    nx = Math.min(Math.max(nx, 0), DW - ic.w); ny = Math.min(Math.max(ny, 0), DH - ic.h);
+    if (P.snap && !cancel) { const c = nearestFreeCell(nx + ic.w / 2, ny + ic.h / 2, ic); if (c) { nx = c.x; ny = c.y; } }
+    if (Math.hypot(nx - d.ox, ny - d.oy) < 0.5) { setPos(ic, nx, ny); return; }
+    el.classList.add('settle'); setPos(ic, nx, ny);
+    commit();
+  };
+  el.addEventListener('pointerup', e => end(e, false));
+  el.addEventListener('pointercancel', e => end(e, true));
+}
+function applyLayout(kind) {
+  layoutKind = kind;
+  icons.forEach(ic => ic.el.remove()); icons = []; selected = null; extraIdx = 0;
+  computeGrid();
+  layoutCapacity = grid.cols * grid.rows;
+  if (kind === 'mine') {
+    for (const [c, r, name, type] of mineCells()) {
+      const pos = cellPos(Math.round(c * (grid.cols - 1) / 21), Math.round(r * (grid.rows - 1) / 9));
+      if (!occupied(pos.x, pos.y, null)) addIcon([name, type], pos);
+    }
+  } else if (kind === 'arranged') {
+    FILES.forEach((f, i) => { const c = Math.floor(i / grid.rows), r = i % grid.rows; if (c < grid.cols) addIcon(f, cellPos(c, r)); });
+  } else if (kind === 'messy') {
+    const rnd = mulberry32(20260928);
+    for (const f of FILES) for (let t = 0; t < 300; t++) {
+      const c = rnd() < 0.45 ? Math.floor(rnd() * Math.min(3, grid.cols)) : Math.floor(rnd() * grid.cols);
+      const pos = cellPos(c, Math.floor(rnd() * grid.rows));
+      if (!occupied(pos.x, pos.y, null)) { addIcon(f, pos); break; }
+    }
+  } else {
+    Array.from({ length: 10 }, (_, r) => [[0, r], [1, r]]).flat().concat([[2, 0], [2, 1], [2, 2], [3, 0], [3, 1], [3, 2], [Math.floor(grid.cols * 0.45), Math.floor(grid.rows * 0.5)]])
+      .forEach(([c, r], i) => addIcon(FILES[i], cellPos(Math.min(c, grid.cols - 1), Math.min(r, grid.rows - 1))));
+  }
+  commit(true);
+}
+
+/* ======================================================================
+   Size / main loop
+   ====================================================================== */
+function resize() {
+  W = innerWidth; H = innerHeight;
+  const scale = PREVIEW ? 0.45 : Math.min(devicePixelRatio || 1, P.quality);
+  const box = cv.getBoundingClientRect();
+  cv.width = Math.round((box.width || W) * scale); cv.height = Math.round((box.height || H) * scale); cv._scale = scale;
+  Gw = Math.ceil(W / DSTEP) + 1; Gh = Math.ceil(H / DSTEP) + 1;
+  buildNoise();
+  cacheOK = false;
+}
+
+const T0 = performance.now();
+let lastT = 0, fpsEMA = 0, frameN = 0, frameMs = 0, simT = 0;
+const px = new Uint8Array(4);
+let paused = false;                              // host: a maximised / fullscreen window covers the desktop
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (paused) { lastT = 0; return; }
+  if (P.cap30 && now - lastT < 31) return;
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.03;
+  if (lastT) fpsEMA = fpsEMA ? fpsEMA * 0.9 + (1 / dt) * 0.1 : 1 / dt;
+  lastT = now;
+  const e = Math.min((now - morphT0) / morphDur, 1);
+  curMix = e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2;
+  const pal = currentPal(now);
+  if (curMix >= 1 && WEBS.some(w => w.mode === 2)) {      // the morph is over: drop the webs that have faded out
+    WEBS = WEBS.filter(w => w.mode !== 2);
+    for (const w of WEBS) { w.A = w.B; w.mode = 0; w.r0 = 1; }
+    buildBuffers();
+  }
+  stepSpider(dt);
+  stepBats(dt, pal.spooky);
+  draw(now);
+  if (++frameN % 10 === 0) updateStats();
+}
+function currentPal(now) {
+  if (moodTo < 0) return MOODS[P.mood];
+  return moodFrom === moodTo ? MOODS[moodTo] : lerpPal(MOODS[moodFrom], MOODS[moodTo], moodProgress(now));
+}
+const scArr = new Float32Array(12);
+const sprData = new Float32Array(8 * 8);
+function draw(now) {
+  const measure = frameN % 20 === 0, t0 = performance.now();
+  if (!gl || !noiseTex) return;
+  ensureBackgrounds(now);
+  if (moodFrom !== moodTo && moodProgress(now) >= 1) moodFrom = moodTo;
+  const pal = currentPal(now), mk = moodFrom === moodTo ? 0 : moodProgress(now);
+  const t = (now - T0) / 1000;
+  for (let i = 0; i < 6; i++) { const a = (t * SWF[i]) % TAU; scArr[2 * i] = Math.sin(a); scArr[2 * i + 1] = Math.cos(a); }
+  const Wc = cv.width / cv._scale, Hc = cv.height / cv._scale, sc = cv._scale;
+  const moon = MOON.B ? [lerp(MOON.A[0], MOON.B[0], curMix), lerp(MOON.A[1], MOON.B[1], curMix)] : [W * 0.8, H * 0.16];
+  const light = [moon[0] + 26 * Math.sin(t * 0.021), moon[1] + 18 * Math.cos(t * 0.017)];
+  const tex = (unit, tx, u) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tx); gl.uniform1i(u, unit); };
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, cv.width, cv.height);
+  // background
+  gl.disable(gl.BLEND);
+  gl.bindVertexArray(emptyVAO);
+  gl.useProgram(CMP.p);
+  const sTo = slotOf(moodTo), sFrom = moodFrom !== moodTo ? slotOf(moodFrom) : sTo;
+  tex(0, BGS[sFrom].tex, CMP.U.uBgA); tex(1, BGS[sTo].tex, CMP.U.uBgB); tex(2, noiseTex, CMP.U.uNoise);
+  gl.uniform2f(CMP.U.uRes, Wc, Hc); gl.uniform2f(CMP.U.uPx, cv.width, cv.height);
+  gl.uniform1f(CMP.U.uScale, sc); gl.uniform1f(CMP.U.uBgK, sFrom === sTo ? 1 : mk);
+  gl.uniform1f(CMP.U.uFog, pal.fog); gl.uniform3f(CMP.U.uFogC, ...pal.fogC);
+  gl.uniform4f(CMP.U.uFogO, fract(t * 0.0035), fract(t * 0.0011), fract(-t * 0.006), fract(t * 0.0021));
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  // sprites: build this frame's list (moon first, then bats behind the webs, spiders on top)
+  let ns = 0;
+  const spr = (x, y, unit, ang, kind, ph, a, ext) => { if (ns >= 8) return; sprData.set([x, y, unit, ang, kind, ph, a, ext], ns * 8); ns++; };
+  spr(moon[0], moon[1], pal.moonR, 0, 2, 0, 1, pal.glowR * 1.6);
+  const nMoon = ns;
+  if (pal.spooky > 0.01) for (const b of BATS) spr(b.x, b.y + Math.sin(b.bob) * 14, b.size, Math.sin(b.bob) * 0.12, 1 + b.blur * 0.5, b.ph, pal.spooky * 0.95, 14);
+  const nBack = ns;
+  // dangling spider (Halloween)
+  let hang = null;
+  const hv = (HANG.vA + (HANG.vB - HANG.vA) * curMix) * pal.spooky;
+  if (hv > 0.01 && HANG.B) {
+    const hx = lerp(HANG.A[0], HANG.B[0], curMix), hy = lerp(HANG.A[1], HANG.B[1], curMix), hl = lerp(HANG.A[2], HANG.B[2], curMix);
+    const len = hl + 16 * Math.sin(t * 0.21 + 1.3) + 6 * Math.sin(t * 0.53), sw = 0.05 * Math.sin(t * 0.7) * (0.4 + 0.6 * P.wind);
+    const sx = hx + Math.sin(sw) * len, sy = hy + Math.cos(sw) * len, unit = 1.45;
+    hang = [hx, hy, sx, sy];
+    spr(sx + Math.sin(sw) * 7.4 * unit, sy + Math.cos(sw) * 7.4 * unit, unit, Math.PI / 2 - sw, 0, 0.3 * Math.sin(t * 0.8), hv, 14);
+  }
+  const sp = spiderPose(t);
+  if (sp) spr(sp[0], sp[1], 1.45, sp[2], 0, SP.leg, sp[3], 14);
+
+  const sprPass = (from, to) => {
+    if (to <= from) return;
+    gl.useProgram(SPP.p);
+    gl.bindVertexArray(sprV.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, sprV.buf);
+    gl.bufferData(gl.ARRAY_BUFFER, sprData.subarray(from * 8, to * 8), gl.STREAM_DRAW);
+    const U = SPP.U;
+    gl.uniform2f(U.uRes, Wc, Hc); gl.uniform2f(U.uLight, light[0], light[1]); gl.uniform1f(U.uScale, sc);
+    gl.uniform3f(U.uRim, ...pal.rim); gl.uniform3f(U.uMoonC, ...pal.moonC); gl.uniform3f(U.uMark, ...pal.mark);
+    gl.uniform1f(U.uMoonK, pal.moonK); gl.uniform1f(U.uGlowK, pal.glowK); gl.uniform1f(U.uGlowR, pal.glowR); gl.uniform1f(U.uMark2, pal.mark2);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, to - from);
+  };
+  sprPass(0, nBack);
+  // shade under the icons
+  if (shadeV.n) {
+    gl.useProgram(SHP.p);
+    gl.bindVertexArray(shadeV.vao);
+    gl.uniform2f(SHP.U.uRes, Wc, Hc); gl.uniform1f(SHP.U.uMix, curMix); gl.uniform1f(SHP.U.uShade, pal.shade);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, shadeV.n);
+  }
+  // silk
+  const silkU = (U, prog) => {
+    gl.useProgram(prog);
+    gl.uniform2f(U.uRes, Wc, Hc); gl.uniform1f(U.uScale, sc); gl.uniform1f(U.uMix, curMix);
+    gl.uniform2fv(U.uSC, scArr); gl.uniform1f(U.uWind, P.wind);
+    gl.uniform2f(U.uLight, light[0], light[1]);
+    gl.uniform3f(U.uSilk, ...pal.silk); gl.uniform3f(U.uHi, ...pal.hi);
+  };
+  if (silkV.n) {
+    silkU(SKP.U, SKP.p);
+    gl.uniform1f(SKP.U.uBase, pal.base); gl.uniform1f(SKP.U.uShim, (t * 0.5) % TAU); gl.uniform1f(SKP.U.uReach, pal.reach);
+    gl.bindVertexArray(silkV.vao);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, silkV.n);
+    if (hang) {                                    // the dangling spider's strand
+      // mode 2 with born 1.0 = a constant alpha of hv
+      const d = new Float32Array([hang[0], hang[1], hang[2], hang[3], hang[0], hang[1], hang[2], hang[3], 0, 0, 0, 0, hv, 2, 1.0, 0, 0.8, 0]);
+      gl.bindVertexArray(dynV.vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, dynV.buf);
+      gl.bufferData(gl.ARRAY_BUFFER, d, gl.STREAM_DRAW);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, 1);
+    }
+  }
+  // dew
+  if (dewV.n && P.dew > 0.001) {
+    silkU(DWP.U, DWP.p);
+    gl.uniform1f(DWP.U.uDew, P.dew * pal.dew); gl.uniform1f(DWP.U.uDewSize, pal.dewSize); gl.uniform1f(DWP.U.uDewB, pal.dewB);
+    gl.uniform1f(DWP.U.uTw, t % 1000);
+    gl.bindVertexArray(dewV.vao);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, dewV.n);
+  }
+  sprPass(nBack, ns);
+  gl.disable(gl.BLEND);
+  gl.bindVertexArray(null);
+  if (measure) { gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); frameMs = performance.now() - t0; }
+}
+
+/* ======================================================================
+   Panel
+   ====================================================================== */
+const statsEl = document.getElementById('stats');
+const GPU = (() => {
+  if (!gl) return '';
+  const ext = gl.getExtension('WEBGL_debug_renderer_info');
+  const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  return name.replace(/^ANGLE \([^,]+,\s*/, '').replace(/\s*\(0x[0-9a-f]+\).*$/i, '')
+    .replace(/\s*(Direct3D|vs_|OpenGL).*$/, '').replace(/\(R\)|\(TM\)/g, '').trim();
+})();
+function updateStats() {
+  const orbs = WEBS.filter(w => w.type === 'orb' && w.mode !== 2).length;
+  statsEl.innerHTML =
+    `<span class="live">● running · ${fpsEMA.toFixed(0)} fps</span><br>GPU ${GPU}<br>` +
+    `frame ${frameMs.toFixed(1)} ms · layout ${geomMs.toFixed(0)} ms · bg ${bakeMs.toFixed(0)} ms<br>` +
+    `webs ${orbs} · threads ${segCount} · drops ${dropCount}<br>canvas ${cv.width}×${cv.height} · icons ${icons.length}`;
+}
+function syncPanel() {
+  document.querySelectorAll('#segLayout button').forEach(b => b.classList.toggle('on', b.dataset.v === layoutKind));
+  document.querySelectorAll('#segMood button').forEach(b => b.classList.toggle('on', +b.dataset.v === P.mood));
+  document.querySelectorAll('.toggles input').forEach(inp => { inp.checked = !!P[inp.dataset.key]; });
+  document.querySelectorAll('#sliders .slider').forEach(el => {
+    const s = SLIDERS.find(x => x.key === el.dataset.key);
+    el.querySelector('input').value = P[s.key]; el.querySelector('.row span:last-child').textContent = s.fmt(P[s.key]);
+  });
+}
+const slidersEl = document.getElementById('sliders');
+for (const s of SLIDERS) {
+  const wrap = document.createElement('div');
+  wrap.className = 'slider'; wrap.dataset.key = s.key;
+  wrap.innerHTML = `<div class="row"><span>${s.label}</span><span></span></div><input type="range" min="${s.min}" max="${s.max}" step="${s.step}" value="${P[s.key]}">`;
+  const out = wrap.querySelector('.row span:last-child'), inp = wrap.querySelector('input');
+  out.textContent = s.fmt(P[s.key]);
+  inp.addEventListener('input', () => {
+    P[s.key] = +inp.value; out.textContent = s.fmt(P[s.key]);
+    if (s.act === 'layout') scheduleLayout();
+  });
+  slidersEl.appendChild(wrap);
+}
+let layoutT = 0;
+function scheduleLayout() { clearTimeout(layoutT); layoutT = setTimeout(() => commit(), 120); }   // slider drags: re-fit once it rests
+document.getElementById('segLayout').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  applyLayout(b.dataset.v); syncPanel();
+});
+document.getElementById('segMood').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  P.mood = +b.dataset.v; syncPanel();
+});
+document.querySelectorAll('.toggles input').forEach(inp => inp.addEventListener('change', () => {
+  const k = inp.dataset.key;
+  P[k] = DISPLAY_KEYS.includes(k) ? (inp.checked ? 1 : 0) : inp.checked;
+  if (k === 'adaptive') commit();
+}));
+document.getElementById('collapse').addEventListener('click', () => {
+  const p = document.getElementById('panel');
+  p.classList.toggle('collapsed');
+  document.getElementById('collapse').textContent = p.classList.contains('collapsed') ? '+' : '–';
+});
+// New seed (settings "refresh", panel "New webs"). Before the hosted page knows its icons, only keep the seed.
+let iconsSeen = !(WALL || PREVIEW);
+function reseed(v) {
+  seed = v; buildNoise(); cacheOK = false;
+  if (!iconsSeen) { refresh(); return; }
+  commit(false, true);
+}
+document.getElementById('btnSeed').addEventListener('click', () => reseed((Math.random() * 1e6) | 0));
+document.getElementById('btnAdd').addEventListener('click', () => {
+  const f = EXTRA[extraIdx++ % EXTRA.length];
+  let pos = null;
+  for (let t = 0; t < 300 && !pos; t++) {
+    const c = cellPos(Math.floor(Math.random() * grid.cols), Math.floor(Math.random() * grid.rows));
+    if (!occupied(c.x, c.y, null)) pos = c;
+  }
+  if (!pos) return;
+  const ic = addIcon(f, pos, true);
+  select(ic);
+  commit();
+});
+desktop.addEventListener('pointerdown', () => select(null));
+addEventListener('keydown', e => {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+    const ic = selected; select(null); ic.el.remove(); icons = icons.filter(x => x !== ic); commit();
+  } else if (e.key === 'h' || e.key === 'H') document.getElementById('panel').classList.toggle('hidden');
+});
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => {
+    if (WALL || PREVIEW) { resize(); refresh(); return; }
+    resize(); computeGrid();
+    if (grid.cols * grid.rows > layoutCapacity && layoutCapacity < 40) { applyLayout(layoutKind); syncPanel(); return; }
+    for (const ic of icons) setPos(ic, Math.min(ic.x, Math.max(0, DW - ic.w)), Math.min(ic.y, Math.max(0, DH - ic.h)));
+    refresh();
+  }, 100);
+});
+function tickClock() {
+  const d = new Date(), z = n => String(n).padStart(2, '0');
+  document.getElementById('clock').innerHTML = `${z(d.getHours())}:${z(d.getMinutes())}<br>${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+setInterval(tickClock, 15000); tickClock();
+
+/* ---------- start ---------- */
+window.__dbg = {
+  P, applyLayout, commit, refresh, reseed, applySettings: v => applySettings(v),
+  get icons() { return icons; }, set icons(v) { icons = v; },
+  get webs() { return WEBS; }, get spider() { return SP; }, get bats() { return BATS; },
+  stats() { return { freeMs, planMs, geomMs, bakeMs, segs: segCount, drops: dropCount, curMix, webs: WEBS.length }; },
+  bench() {
+    const ts = [];
+    for (let i = 0; i < 10; i++) { const a = performance.now(); draw(performance.now()); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); ts.push(performance.now() - a); }
+    ts.sort((a, b) => a - b);
+    const c0 = performance.now(); refresh(); const layoutMs = performance.now() - c0;
+    cacheOK = false;
+    const b0 = performance.now(); draw(performance.now()); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); const bgMs = performance.now() - b0;
+    return { frame: +ts[5].toFixed(2), layout: +layoutMs.toFixed(1), free: +freeMs.toFixed(1), plan: +planMs.toFixed(1), frameWithBake: +bgMs.toFixed(1),
+      threads: segCount, drops: dropCount, canvas: cv.width + 'x' + cv.height, gpu: GPU };
+  },
+};
+if (gl) {
+  resize();
+  buildNoiseTex();
+  if (WALL || PREVIEW) startHostedMode();
+  else { applyLayout('mine'); syncPanel(); }
+  requestAnimationFrame(frame);
+}
+
+/* ======================================================================
+   Hosted mode: the page is driven from outside
+   - wallpaper (?wallpaper=1): the desktop host sends messages through WebView2
+   - preview (?preview=1): the settings window (settings.html) posts messages to the iframe
+   Messages: icons (real icon rects, physical px) / settings (partial) / reset (defaults) / pause
+   ====================================================================== */
+// Accept only this theme's slider, switch and option keys
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);
+  let layout = false;
+  for (const k in v) {
+    const sl = SLIDERS.find(s => s.key === k), isDisp = DISPLAY_KEYS.includes(k), isOpt = Object.prototype.hasOwnProperty.call(OPTION_KEYS, k);
+    if (!sl && !isDisp && !isOpt) continue;
+    const val = v[k];
+    if (typeof val !== 'number' || !isFinite(val) || P[k] === val) continue;
+    if (isDisp && val !== 0 && val !== 1) continue;
+    if (isOpt && (!Number.isInteger(val) || val < 0 || val >= OPTION_KEYS[k])) continue;
+    P[k] = sl ? clamp(val, sl.min, sl.max) : val;
+    if (k === 'adaptive' || k === 'density') layout = true;
+  }
+  if (layout && iconsSeen) commit();
+  else if (layout) refresh();
+  if (!WALL && !PREVIEW) syncPanel();
+}
+
+function drawGhosts() {
+  const box = document.getElementById('ghosts');
+  box.innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+
+function startHostedMode() {
+  document.body.classList.add('wall');
+  if (PREVIEW) {
+    document.body.classList.add('preview');
+    const g = document.createElement('div'); g.id = 'ghosts'; document.body.appendChild(g);
+  }
+  icons = [];
+  refresh();                                      // dark scenery until the icon positions arrive (webs are spun in then)
+  for (const w of WEBS) { w.mode = 2; w.r0 = 0; }
+  buildBuffers();
+  let first = true;
+  const handle = m => {
+    if (!m || typeof m !== 'object') return;
+    if (m.t === 'pause') { paused = PREVIEW ? false : !!m.v; return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;       // physical px -> CSS px
+    icons = m.vis && Array.isArray(m.r) ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    commit(first);                                // first time: the webs are spun in; later: they re-fit around the icons
+    first = false;
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => { if (ev.source === parent) { try { handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); } catch (e) {} } });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => { try { handle(JSON.parse(ev.data)); } catch (e) {} });
+  host.postMessage('ready');
+}
+</script>
+<script src="share.js"></script>   <!-- share image / share animation (sample icons, names as blocks) -->
+</body>
+</html>
