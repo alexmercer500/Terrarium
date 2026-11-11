@@ -6,7 +6,7 @@ Terrarium is a GPL-3.0 fork of Deskland Preview (upstream remote: `upstream`, ht
 - Product name is `Terrarium`. Never reintroduce the Deskland name or icon in anything user-visible (window titles, tray, installer, settings, theme panels). Internal identifiers inherited from upstream (`DESKLAND_THUMBS`, `desklandSnapshot`, `desklandRecord`) are kept on purpose to ease upstream merges.
 - Data lives in `%LOCALAPPDATA%\Terrarium`; installs go to `Programs\Terrarium`; Run key, startup shortcut, mutex and event names all use `Terrarium` so it can coexist with Deskland.
 - All themes are free and complete. There is no locked/purchase/entitlement code, sign-in or update service; don't add any.
-- UI languages: English and Simplified Chinese only. Chinese theme text lives in `themes.json`; English in `i18n/en.json` under `themes.<id>`. Keep param keys, defaults and both languages in sync.
+- English only: theme names, descriptions and parameter text live in `themes.json`; settings-window and tray strings in `i18n/en.json`. Comments, logs and sample data are English; keep it that way.
 - Don't commit `host/bin/`, `host/lib/`, `dist/`, personal data, credentials or machine paths.
 
 ## Build and preview

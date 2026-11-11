@@ -26,7 +26,7 @@ Every theme has its own settings, saved between sessions.
 - **Adaptive scenery:** reads the real positions of desktop icons and transitions smoothly when they move.
 - **Made for the desktop:** tray controls, start on sign-in, automatic pause when a window is maximized or full-screen; targets 30 fps on integrated graphics.
 - **Private sharing:** image and animation exports draw sample icons and color blocks, never a screenshot of your desktop or real file names.
-- **English and Simplified Chinese** interface.
+- **English** interface, no account, no telemetry, no network access at runtime.
 
 ## Requirements
 
@@ -83,7 +83,7 @@ The first build downloads portable NSIS and Microsoft's WebView2 bootstrapper. A
 | `prototype/space.html`, `snow.html`, `reef.html`, `city.html` | Night Sky, Snowy Mountains, Coral Reef and City themes |
 | `prototype/settings.html` | Settings window |
 | `prototype/share.js` | Privacy-preserving image and animation sharing |
-| `prototype/i18n/` | Interface strings (English, Simplified Chinese) |
+| `prototype/i18n/` | Interface strings (English) |
 | `prototype/assets/` | Images used by the themes |
 | `tools/` | Installer build tooling |
 

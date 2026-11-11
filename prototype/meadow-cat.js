@@ -1,4 +1,4 @@
-// 草地上的小黑猫：贴图只上传一次，位置随种子更换，始终为男孩的整轮路线留空。
+// Little black cat on the meadow: the sprite is uploaded only once; its position changes with the seed and always keeps the boy's full loop route clear.
 let meadowCatScene=null;
 function meadowCatSegmentDistance(p,a,b) {
   const dx=b.x-a.x,dy=b.y-a.y;
@@ -15,10 +15,10 @@ function meadowCatRunLanes(state,width,height,taskbar) {
       add(from,to);from=to;if(to.exit)break;
     }
   };
-  // 包含正在进行的那一段，以及之后一直跑出上边缘的各段。
+  // Includes the segment in progress plus every later segment until he runs out past the top edge.
   const current=state.routeTarget?add(state.position,state.routeTarget):state.position;
   finish(current);
-  // 下方返回后每轮走同一条路线，预留整轮，而非只避开男孩当前的位置。
+  // After coming back from below he takes the same route every loop, so reserve the whole loop rather than only avoiding the boy's current position.
   const bottom={x:Math.max(96*scale+12,Math.min(width*.70,width-612*scale-12)),y:height+116*scale+24};
   const y=(height-taskbar)*.70;
   const entry={x:Math.max(96*scale+12,bottom.x-(bottom.y-y)*.65),y};
@@ -59,7 +59,7 @@ function meadowCatTailAngle(time,sceneSeed) {
   const period=10+Math.abs(sceneSeed%4),age=(time+Math.abs(sceneSeed%1300)/1000)%period-3;
   if(age<0||age>=1.6)return 0;
   const t=age/1.6;
-  // 大部分时间安静躺着，偶尔柔和地来回摆两下，起止都回到原姿势。
+  // Lies still most of the time, occasionally swishing gently back and forth twice, starting and ending in the original pose.
   return Math.sin(t*Math.PI*4)*Math.pow(Math.sin(t*Math.PI),2)*.34;
 }
 function prepareMeadowCat(boy,now=0) {
@@ -81,7 +81,7 @@ function createMeadowCatScene() {
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);ready=true;
   };
-  image.onerror=()=>console.warn('草地小猫素材加载失败');
+  image.onerror=()=>console.warn('Failed to load the meadow cat sprite');
   image.src='assets/meadow-black-kitten.png';
   return {prepare(boy,now){
     if(previousTime!==null)time+=Math.max(0,Math.min(.05,(now-previousTime)/1000));

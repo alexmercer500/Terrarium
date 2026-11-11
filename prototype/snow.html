@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -23,7 +23,7 @@
   :root { --taskbar: 48px; }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #a6c46e; }
-  body { font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
   #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
   #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
 
@@ -146,7 +146,7 @@
       <label><input type="checkbox" data-key="cap30">Cap 30 fps</label>
     </div>
     <div class="sec btns">
-      <button id="btnAdd">＋ New file</button>
+      <button id="btnAdd">+ New file</button>
       <button id="btnSeed">New scene</button>
     </div>
     <div id="stats"></div>
@@ -210,38 +210,40 @@ const APP_COLORS = ['#e8553e','#2f7de1','#18a058','#8b5cf6','#f59e0b','#0ea5a4',
 function appSVG(name) {
   let h = 0; for (const ch of name) h = (h * 31 + ch.codePointAt(0)) >>> 0;
   return `<rect x="5" y="5" width="38" height="38" rx="9" fill="${APP_COLORS[h % APP_COLORS.length]}"/><path d="M5 14a9 9 0 0 1 9-9h20a9 9 0 0 1 9 9v6H5z" fill="#fff" opacity=".14"/>` +
-    `<text x="24" y="31.5" text-anchor="middle" font-family="Segoe UI,Microsoft YaHei,Arial" font-weight="700" font-size="18" fill="#fff">${[...name][0]}</text>`;
+    `<text x="24" y="31.5" text-anchor="middle" font-family="Segoe UI,Arial" font-weight="700" font-size="18" fill="#fff">${[...name][0]}</text>`;
 }
 const glyphOf = (name, type) => type === 'app' ? appSVG(name) : SVG[type];
 
 const FILES = [
-  ['回收站','bin'], ['项目资料','folder'], ['2026 报价单.xlsx','xlsx'], ['产品需求.docx','docx'],
-  ['截图_0927.png','png'], ['合同扫描件.pdf','pdf'], ['新建文件夹','folder'], ['设计素材','folder'],
-  ['旅行照片','folder'], ['安装包.zip','zip'], ['会议纪要.docx','docx'], ['壁纸灵感','folder'],
-  ['周报.xlsx','xlsx'], ['草图.png','png'], ['旧备份','folder'], ['微信图片.png','png'], ['说明书.pdf','pdf'], ['简历.docx','docx'], ['支出表.xlsx','xlsx'], ['压缩备份.zip','zip'], ['素材图.png','png'], ['下载','folder'], ['表情包.png','png'], ['工资条.xlsx','xlsx'], ['租房合同.pdf','pdf'], ['日记.docx','docx'], ['桌面截图.png','png'],
+  ['Recycle Bin','bin'], ['Projects','folder'], ['Quote 2026.xlsx','xlsx'], ['Product spec.docx','docx'],
+  ['Screenshot_0927.png','png'], ['Contract scan.pdf','pdf'], ['New folder','folder'], ['Design assets','folder'],
+  ['Travel photos','folder'], ['Installer.zip','zip'], ['Meeting notes.docx','docx'], ['Wallpaper ideas','folder'],
+  ['Weekly report.xlsx','xlsx'], ['Sketch.png','png'], ['Old backup','folder'], ['Photo.png','png'], ['Manual.pdf','pdf'], ['Resume.docx','docx'],
+  ['Expenses.xlsx','xlsx'], ['Backup.zip','zip'], ['Reference.png','png'], ['Downloads','folder'], ['Stickers.png','png'], ['Payslip.xlsx','xlsx'],
+  ['Lease.pdf','pdf'], ['Journal.docx','docx'], ['Desktop.png','png'],
 ];
 const EXTRA = [
-  ['新建文本文档.txt','txt'], ['新建文件夹 (2)','folder'], ['发票.pdf','pdf'], ['数据导出.xlsx','xlsx'],
-  ['截图_0928.png','png'], ['备忘.txt','txt'], ['归档.zip','zip'], ['新建文件夹 (3)','folder'],
+  ['New Text Document.txt','txt'], ['New folder (2)','folder'], ['Invoice.pdf','pdf'], ['Export.xlsx','xlsx'],
+  ['Screenshot_0928.png','png'], ['Memo.txt','txt'], ['Archive.zip','zip'], ['New folder (3)','folder'],
 ];
-const APPS = ['回收站','此电脑','微信','飞书','钉钉','腾讯会议','网易云音乐','剪映','Photoshop','Obsidian','VS Code','Krita',
-  'AutoCAD','Rhino','KeyShot','百度网盘','Chrome','Blender','Figma','Notion','QQ','Steam','Eagle','OBS','Kimi','PureRef','EV录屏','NX 12.0','MarkText','Codex'];
-const MISC = [['projects','folder'],['游戏','folder'],['todolist','folder'],['OKR管理.xlsx','xlsx'],['固定成本.xlsx','xlsx'],
-  ['pdfarrange','app'],['stp.log','txt'],['零件.stp','txt'],['零件.3dm','png'],['预览','folder']];
-const RIGHT = [['plot.log','txt'],['工具','folder'],['归档.rar','zip'],['1685x128.png','png'],['微信图片.jpg','png'],['0914.png','png'],
-  ['微信图片 2.jpg','png'],['images.png','png'],['目录.docx','docx'],['api.txt','txt'],['c4ef.png','png'],['0918.png','png'],
-  ['板调整.pdf','pdf'],['recommend.txt','txt'],['button.stp','txt'],['新建文本 (2).txt','txt'],['ugstep21','txt'],['新建文本 (3).txt','txt'],
-  ['工作计划.txt','txt'],['微信图片 3.jpg','png'],['新建 DOCX.docx','docx'],['SEO.txt','txt'],['resend.txt','txt'],['产品介绍.txt','txt'],
-  ['USER.pdf','pdf'],['新建文本.txt','txt'],['餐椅.pur','png'],['PAP-20.pdf','pdf'],['演示文稿.pptx','pdf'],['问题点.txt','txt']];
+const APPS = ['Recycle Bin','This PC','Mail','Slack','Teams','Zoom','Spotify','DaVinci Resolve','Photoshop','Obsidian','VS Code','Krita',
+  'AutoCAD','Rhino','KeyShot','Dropbox','Chrome','Blender','Figma','Notion','Discord','Steam','Eagle','OBS','Postman','PureRef','Recorder','NX 12.0','MarkText','Codex'];
+const MISC = [['projects','folder'],['Games','folder'],['todolist','folder'],['OKR.xlsx','xlsx'],['Fixed costs.xlsx','xlsx'],
+  ['pdfarrange','app'],['stp.log','txt'],['part.stp','txt'],['part.3dm','png'],['Preview','folder']];
+const RIGHT = [['plot.log','txt'],['Tools','folder'],['archive.rar','zip'],['1685x128.png','png'],['image.jpg','png'],['0914.png','png'],
+  ['image 2.jpg','png'],['images.png','png'],['Contents.docx','docx'],['api.txt','txt'],['c4ef.png','png'],['0918.png','png'],
+  ['Board.pdf','pdf'],['recommend.txt','txt'],['button.stp','txt'],['New Text (2).txt','txt'],['ugstep21','txt'],['New Text (3).txt','txt'],
+  ['Plan.txt','txt'],['image 3.jpg','png'],['New DOCX.docx','docx'],['SEO.txt','txt'],['resend.txt','txt'],['Product intro.txt','txt'],
+  ['USER.pdf','pdf'],['New Text.txt','txt'],['Chair.pur','png'],['PAP-20.pdf','pdf'],['Slides.pptx','pdf'],['Issues.txt','txt']];
 function mineCells() {
   const out = []; let a = 0, m = 0, rgt = 0, sh = 0;
   for (let c = 0; c < 3; c++) for (let r = 0; r < 10; r++) {
     const name = APPS[a++];
-    out.push([c, r, name, name === '回收站' ? 'bin' : name === '此电脑' ? 'pc' : 'app']);
+    out.push([c, r, name, name === 'Recycle Bin' ? 'bin' : name === 'This PC' ? 'pc' : 'app']);
   }
   for (let r = 0; r < 10; r++) out.push([3, r, ...MISC[m++]]);
-  for (let r = 0; r < 5; r++) out.push([5, r, `零件结构 ${r + 1}.dwg`, 'cad']);
-  out.push([6, 0, '腿测试.bak', 'txt']);
+  for (let r = 0; r < 5; r++) out.push([5, r, `Part ${r + 1}.dwg`, 'cad']);
+  out.push([6, 0, 'leg-test.bak', 'txt']);
   for (const [c, r] of [[6,4],[6,5],[6,6],[6,7],[6,8],[7,3],[7,4],[7,5],[7,6],[7,7],[8,4],[8,5],[8,6],[9,2],[9,3],[9,4],[9,5],[9,6]])
     out.push([c, r, `ScreenShot ${++sh}.png`, 'shot']);
   for (const [c, r] of [[11,1],[11,2],[11,3],[12,1],[12,2],[12,3],[12,4],[13,1],[13,2],[13,3],[13,4],[14,1],[14,3],[14,4],[15,1],[15,6],

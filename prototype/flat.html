@@ -1,23 +1,23 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Terrarium · 沙滩（原型）</title>
+<title>Terrarium · Beach (prototype)</title>
 <!--
-  Deskland · 扁平插画风海边主题原型 v0.4（纯 WebGL2，2D，每帧直接计算）
-  画风参考：扁平色块 + 喷绘颗粒（丝网印刷感）
-  - 陆地场（CPU，图标变化时才算）：高斯融球 + 噪声扭曲 → 到海岸的距离 s；图标变化时岸线平滑过渡
-  - 海：远处青蓝 → 近岸薄荷绿的颗粒渐变；水面上不规则的浅色斑驳光斑（越近岸越密，缓慢流动）
-  - 浪：岸边一条细白线 + 海面一侧颗粒状水雾；稍远处一道向岸推进的淡浪线；海水周期性冲上沙滩
-  - 沙滩：几层淡紫灰 / 灰粉的湿沙色带（之前海浪到过的位置），往内陆过渡到奶白干沙
-  - 皮划艇：在深水里慢慢划，会绕开陆地
+  Deskland · flat-illustration beach theme prototype v0.4 (pure WebGL2, 2D, computed every frame)
+  Art style: flat colour blocks + spray grain (screen-print feel)
+  - Land field (CPU, recomputed only when icons change): Gaussian metaballs + noise warp -> distance s to the shore; the shoreline eases over when icons change
+  - Sea: grainy gradient from teal-blue offshore to mint green near shore; irregular pale dappled light patches on the water (denser near shore, drifting slowly)
+  - Waves: a thin white line at the shore + grainy spray on the sea side; a faint wave line further out rolling toward shore; water periodically washes up the beach
+  - Beach: a few bands of pale lilac-grey / grey-pink wet sand (where earlier waves reached), fading inland to cream dry sand
+  - Kayaks: paddle slowly in deep water and steer around land
 -->
 <style>
   :root { --taskbar: 48px; }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #1aa3c4; }
-  body { font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
   #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
   #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
 
@@ -62,9 +62,9 @@
     font-size: 12px; line-height: 1.4; box-shadow: 0 12px 32px rgba(0,0,0,.25); z-index: 50;
   }
   #panel, #panel.hidden { display: none; }
-  /* 壁纸模式（?wallpaper=1，由桌面宿主程序加载）：真实图标和任务栏由 Windows 自己画 */
+  /* Wallpaper mode (?wallpaper=1, loaded by the desktop host): Windows draws the real icons and taskbar */
   body.wall #panel, body.wall #taskbar, body.wall #desktop { display: none; }
-  /* 预览模式（?preview=1，设置窗口里）：用半透明的方块示意真实图标的位置 */
+  /* Preview mode (?preview=1, inside the settings window): translucent blocks mark where the real icons are */
   #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
   body.preview #ghosts { display: block; }
   .ghost { position: absolute; }
@@ -120,65 +120,65 @@
 
 <aside id="panel" hidden>
   <header>
-    <div><b>Terrarium</b><span>沙滩 · 原型 v0.4</span></div>
-    <div><button class="ibtn" id="collapse" title="折叠">–</button></div>
+    <div><b>Terrarium</b><span>Beach · prototype v0.4</span></div>
+    <div><button class="ibtn" id="collapse" title="Collapse">–</button></div>
   </header>
   <div class="body">
-    <div class="sec"><div class="t">桌面布局</div>
+    <div class="sec"><div class="t">Desktop layout</div>
       <div class="seg">
-        <button data-v="mine">仿你的桌面</button><button data-v="arranged">自动排列</button><button data-v="messy">杂乱</button><button data-v="minimal">极简</button>
+        <button data-v="mine">Mine</button><button data-v="arranged">Arranged</button><button data-v="messy">Messy</button><button data-v="minimal">Minimal</button>
       </div>
     </div>
     <div class="sec" id="sliders"></div>
     <div class="sec toggles">
-      <label><input type="checkbox" data-key="debug">显示海岸线</label>
-      <label><input type="checkbox" data-key="snap">对齐网格</label>
-      <label><input type="checkbox" data-key="cap30">限帧 30fps</label>
+      <label><input type="checkbox" data-key="debug">Show shoreline</label>
+      <label><input type="checkbox" data-key="snap">Snap to grid</label>
+      <label><input type="checkbox" data-key="cap30">Cap 30 fps</label>
     </div>
     <div class="sec btns">
-      <button id="btnAdd">＋ 新建文件</button>
-      <button id="btnSeed">换一种岸线</button>
+      <button id="btnAdd">+ New file</button>
+      <button id="btnSeed">New shoreline</button>
     </div>
     <div id="stats"></div>
-    <div class="hint">拖动图标，松手后海岸线会跟着移动<br>点击海面有涟漪 · Del 删除 · H 隐藏面板</div>
+    <div class="hint">Drag icons; the shoreline follows when you let go.<br>Click the sea for ripples · Del deletes · H hides this panel</div>
   </div>
 </aside>
-<div id="nogl">当前浏览器不支持 WebGL2，无法运行原型。</div>
+<div id="nogl">This browser does not support WebGL2.</div>
 
 <script src="beach-palms.js"></script>
 <script>
 'use strict';
 
 /* ======================================================================
-   参数
+   Parameters
    ====================================================================== */
 const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
 const STEP = 5;
 const MORPH_MS = 1800;
 
 const QS = new URLSearchParams(location.search);
-const WALL = QS.has('wallpaper');      // 壁纸模式：桌面宿主加载，消息来自宿主
-const PREVIEW = QS.has('preview');     // 预览模式：设置窗口里的缩略预览（iframe），消息来自父页面
-// 默认值要和 themes.json 里海边主题的 default 保持一致
-// 海浪（speed、runup、wave、spacing、waves）和 grain、quality 不再开放调节，固定为这里的值
+const WALL = QS.has('wallpaper');      // wallpaper mode: loaded by the desktop host, messages come from the host
+const PREVIEW = QS.has('preview');     // preview mode: thumbnail preview in the settings window (iframe), messages come from the parent page
+// Defaults must match the beach theme's "default" in themes.json
+// Waves (speed, runup, wave, spacing, waves), grain and quality are no longer user-adjustable; they are fixed here
 const P = {
   sigma: 85, warp: 34, shallow: 260, shoal: 110,
-  speed: 22, runup: 120, wave: 1.6, spacing: 70, waves: 1, grain: 1, quality: 2,   // quality 2：按屏幕的实际像素画（150% 缩放时不再放大发糊）
+  speed: 22, runup: 120, wave: 1.6, spacing: 70, waves: 1, grain: 1, quality: 2,   // quality 2: render at the screen's real pixels (no upscaled blur at 150% scaling)
   kayaks: 2, birds: 3, palms: 4, debug: false, snap: true, cap30: true,
 };
 const DEFAULTS = Object.assign({}, P);
 const SLIDERS = [
-  { key: 'palms', label: '椰子树数量', min: 0, max: 10, step: 1, fmt: v => v + ' 棵' },
-  { key: 'sigma',   label: '离岸距离', min: 40,  max: 200, step: 1,    fmt: v => v + ' px', act: 'field' },
-  { key: 'warp',    label: '海岸曲折', min: 0,   max: 80,  step: 1,    fmt: v => v,         act: 'field' },
-  { key: 'shoal',   label: '透明浅滩', min: 0,   max: 300, step: 1,    fmt: v => v + ' px' },
-  { key: 'shallow', label: '浅海宽度', min: 120, max: 700, step: 1,    fmt: v => v + ' px' },
-  { key: 'kayaks',  label: '皮划艇',   min: 0,   max: 4,   step: 1,    fmt: v => v + ' 艘',  act: 'kayaks' },
-  { key: 'birds',   label: '海鸟',     min: 0,   max: 8,   step: 1,    fmt: v => v + ' 只',  act: 'birds' },
+  { key: 'palms', label: 'Palm trees', min: 0, max: 10, step: 1, fmt: v => v },
+  { key: 'sigma',   label: 'Shore offset', min: 40,  max: 200, step: 1,    fmt: v => v + ' px', act: 'field' },
+  { key: 'warp',    label: 'Coast wiggle', min: 0,   max: 80,  step: 1,    fmt: v => v,         act: 'field' },
+  { key: 'shoal',   label: 'Clear shallows', min: 0,   max: 300, step: 1,    fmt: v => v + ' px' },
+  { key: 'shallow', label: 'Shallow sea width', min: 120, max: 700, step: 1,    fmt: v => v + ' px' },
+  { key: 'kayaks',  label: 'Kayaks',   min: 0,   max: 4,   step: 1,    fmt: v => v,  act: 'kayaks' },
+  { key: 'birds',   label: 'Seabirds',     min: 0,   max: 8,   step: 1,    fmt: v => v,  act: 'birds' },
 ];
 
 /* ======================================================================
-   图标与布局数据
+   Icon and layout data
    ====================================================================== */
 const PAGE = '<path d="M12 4h17l9 9v29a2 2 0 0 1-2 2H12a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" fill="#fbfbfb" stroke="#c4c4c4"/><path d="M29 4v7a2 2 0 0 0 2 2h7z" fill="#dedede"/>';
 const LINES = '<path d="M24 20h10M24 25h10M24 30h10M24 35h10" stroke="#c9c9c9" stroke-width="1.6"/>';
@@ -200,38 +200,40 @@ const APP_COLORS = ['#e8553e','#2f7de1','#18a058','#8b5cf6','#f59e0b','#0ea5a4',
 function appSVG(name) {
   let h = 0; for (const ch of name) h = (h * 31 + ch.codePointAt(0)) >>> 0;
   return `<rect x="5" y="5" width="38" height="38" rx="9" fill="${APP_COLORS[h % APP_COLORS.length]}"/><path d="M5 14a9 9 0 0 1 9-9h20a9 9 0 0 1 9 9v6H5z" fill="#fff" opacity=".14"/>` +
-    `<text x="24" y="31.5" text-anchor="middle" font-family="Segoe UI,Microsoft YaHei,Arial" font-weight="700" font-size="18" fill="#fff">${[...name][0]}</text>`;
+    `<text x="24" y="31.5" text-anchor="middle" font-family="Segoe UI,Arial" font-weight="700" font-size="18" fill="#fff">${[...name][0]}</text>`;
 }
 const glyphOf = (name, type) => type === 'app' ? appSVG(name) : SVG[type];
 
 const FILES = [
-  ['回收站','bin'], ['项目资料','folder'], ['2026 报价单.xlsx','xlsx'], ['产品需求.docx','docx'],
-  ['截图_0927.png','png'], ['合同扫描件.pdf','pdf'], ['新建文件夹','folder'], ['设计素材','folder'],
-  ['旅行照片','folder'], ['安装包.zip','zip'], ['会议纪要.docx','docx'], ['壁纸灵感','folder'],
-  ['周报.xlsx','xlsx'], ['草图.png','png'], ['旧备份','folder'], ['微信图片.png','png'], ['说明书.pdf','pdf'], ['简历.docx','docx'], ['支出表.xlsx','xlsx'], ['压缩备份.zip','zip'], ['素材图.png','png'], ['下载','folder'], ['表情包.png','png'], ['工资条.xlsx','xlsx'], ['租房合同.pdf','pdf'], ['日记.docx','docx'], ['桌面截图.png','png'],
+  ['Recycle Bin','bin'], ['Projects','folder'], ['Quote 2026.xlsx','xlsx'], ['Product spec.docx','docx'],
+  ['Screenshot_0927.png','png'], ['Contract scan.pdf','pdf'], ['New folder','folder'], ['Design assets','folder'],
+  ['Travel photos','folder'], ['Installer.zip','zip'], ['Meeting notes.docx','docx'], ['Wallpaper ideas','folder'],
+  ['Weekly report.xlsx','xlsx'], ['Sketch.png','png'], ['Old backup','folder'], ['Photo.png','png'], ['Manual.pdf','pdf'], ['Resume.docx','docx'],
+  ['Expenses.xlsx','xlsx'], ['Backup.zip','zip'], ['Reference.png','png'], ['Downloads','folder'], ['Stickers.png','png'], ['Payslip.xlsx','xlsx'],
+  ['Lease.pdf','pdf'], ['Journal.docx','docx'], ['Desktop.png','png'],
 ];
 const EXTRA = [
-  ['新建文本文档.txt','txt'], ['新建文件夹 (2)','folder'], ['发票.pdf','pdf'], ['数据导出.xlsx','xlsx'],
-  ['截图_0928.png','png'], ['备忘.txt','txt'], ['归档.zip','zip'], ['新建文件夹 (3)','folder'],
+  ['New Text Document.txt','txt'], ['New folder (2)','folder'], ['Invoice.pdf','pdf'], ['Export.xlsx','xlsx'],
+  ['Screenshot_0928.png','png'], ['Memo.txt','txt'], ['Archive.zip','zip'], ['New folder (3)','folder'],
 ];
-const APPS = ['回收站','此电脑','微信','飞书','钉钉','腾讯会议','网易云音乐','剪映','Photoshop','Obsidian','VS Code','Krita',
-  'AutoCAD','Rhino','KeyShot','百度网盘','Chrome','Blender','Figma','Notion','QQ','Steam','Eagle','OBS','Kimi','PureRef','EV录屏','NX 12.0','MarkText','Codex'];
-const MISC = [['projects','folder'],['游戏','folder'],['todolist','folder'],['OKR管理.xlsx','xlsx'],['固定成本.xlsx','xlsx'],
-  ['pdfarrange','app'],['stp.log','txt'],['零件.stp','txt'],['零件.3dm','png'],['预览','folder']];
-const RIGHT = [['plot.log','txt'],['工具','folder'],['归档.rar','zip'],['1685x128.png','png'],['微信图片.jpg','png'],['0914.png','png'],
-  ['微信图片 2.jpg','png'],['images.png','png'],['目录.docx','docx'],['api.txt','txt'],['c4ef.png','png'],['0918.png','png'],
-  ['板调整.pdf','pdf'],['recommend.txt','txt'],['button.stp','txt'],['新建文本 (2).txt','txt'],['ugstep21','txt'],['新建文本 (3).txt','txt'],
-  ['工作计划.txt','txt'],['微信图片 3.jpg','png'],['新建 DOCX.docx','docx'],['SEO.txt','txt'],['resend.txt','txt'],['产品介绍.txt','txt'],
-  ['USER.pdf','pdf'],['新建文本.txt','txt'],['餐椅.pur','png'],['PAP-20.pdf','pdf'],['演示文稿.pptx','pdf'],['问题点.txt','txt']];
+const APPS = ['Recycle Bin','This PC','Mail','Slack','Teams','Zoom','Spotify','DaVinci Resolve','Photoshop','Obsidian','VS Code','Krita',
+  'AutoCAD','Rhino','KeyShot','Dropbox','Chrome','Blender','Figma','Notion','Discord','Steam','Eagle','OBS','Postman','PureRef','Recorder','NX 12.0','MarkText','Codex'];
+const MISC = [['projects','folder'],['Games','folder'],['todolist','folder'],['OKR.xlsx','xlsx'],['Fixed costs.xlsx','xlsx'],
+  ['pdfarrange','app'],['stp.log','txt'],['part.stp','txt'],['part.3dm','png'],['Preview','folder']];
+const RIGHT = [['plot.log','txt'],['Tools','folder'],['archive.rar','zip'],['1685x128.png','png'],['image.jpg','png'],['0914.png','png'],
+  ['image 2.jpg','png'],['images.png','png'],['Contents.docx','docx'],['api.txt','txt'],['c4ef.png','png'],['0918.png','png'],
+  ['Board.pdf','pdf'],['recommend.txt','txt'],['button.stp','txt'],['New Text (2).txt','txt'],['ugstep21','txt'],['New Text (3).txt','txt'],
+  ['Plan.txt','txt'],['image 3.jpg','png'],['New DOCX.docx','docx'],['SEO.txt','txt'],['resend.txt','txt'],['Product intro.txt','txt'],
+  ['USER.pdf','pdf'],['New Text.txt','txt'],['Chair.pur','png'],['PAP-20.pdf','pdf'],['Slides.pptx','pdf'],['Issues.txt','txt']];
 function mineCells() {
   const out = []; let a = 0, m = 0, rgt = 0, sh = 0;
   for (let c = 0; c < 3; c++) for (let r = 0; r < 10; r++) {
     const name = APPS[a++];
-    out.push([c, r, name, name === '回收站' ? 'bin' : name === '此电脑' ? 'pc' : 'app']);
+    out.push([c, r, name, name === 'Recycle Bin' ? 'bin' : name === 'This PC' ? 'pc' : 'app']);
   }
   for (let r = 0; r < 10; r++) out.push([3, r, ...MISC[m++]]);
-  for (let r = 0; r < 5; r++) out.push([5, r, `零件结构 ${r + 1}.dwg`, 'cad']);
-  out.push([6, 0, '腿测试.bak', 'txt']);
+  for (let r = 0; r < 5; r++) out.push([5, r, `Part ${r + 1}.dwg`, 'cad']);
+  out.push([6, 0, 'leg-test.bak', 'txt']);
   for (const [c, r] of [[6,4],[6,5],[6,6],[6,7],[6,8],[7,3],[7,4],[7,5],[7,6],[7,7],[8,4],[8,5],[8,6],[9,2],[9,3],[9,4],[9,5],[9,6]])
     out.push([c, r, `ScreenShot ${++sh}.png`, 'shot']);
   for (const [c, r] of [[11,1],[11,2],[11,3],[12,1],[12,2],[12,3],[12,4],[13,1],[13,2],[13,3],[13,4],[14,1],[14,3],[14,4],[15,1],[15,6],
@@ -242,7 +244,7 @@ function mineCells() {
 }
 
 /* ======================================================================
-   CPU 噪声 + 可平铺噪声纹理
+   CPU noise + tileable noise texture
    ====================================================================== */
 let seed = (Math.random() * 1e6) | 0;
 function hash2(x, y, k = 0) {
@@ -288,7 +290,7 @@ function makeNoiseImage() {
 }
 
 /* ======================================================================
-   陆地场（CPU）：s = 到海岸的有符号距离（<0 陆地）
+   Land field (CPU): s = signed distance to the shore (<0 is land)
    ====================================================================== */
 let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1, NZ = null;
 function buildNoise() {
@@ -319,7 +321,7 @@ function computeField(rects) {
       f1[i] += Math.exp(-(dx * dx + dy * dy) * is1);
     }
   }
-  // 下限 = 计算范围边缘处的贡献值：范围内外算出的"离岸距离"一致，深海不会出现方框状的接缝
+  // Floor = the contribution at the edge of the computed range, so the "distance to shore" matches inside and outside the range and the deep sea shows no boxy seams
   const c0 = Math.sqrt(-Math.log(0.35)), s = new Float32Array(N), fMin = Math.exp(-30);
   for (let i = 0; i < N; i++) {
     const g = Math.log(Math.max(f1[i], fMin));
@@ -335,7 +337,7 @@ function sampleArr(a, x, y) {
 }
 
 /* ======================================================================
-   着色器
+   Shaders
    ====================================================================== */
 const VS = `#version 300 es
 void main() {
@@ -349,24 +351,24 @@ uniform sampler2D uNoise, uFA, uFB;
 uniform vec2 uRes, uGrid;
 uniform float uScale, uSeed, uStep, uMix, uTime, uSpeed, uRunup, uShallow, uShoal, uGrain, uDebug, uWave, uSigma, uSpacing, uWaves;
 uniform float uKayN;
-uniform vec4 uKay[4];          // x, y, 朝向, 划桨相位
+uniform vec4 uKay[4];          // x, y, heading, paddle phase
 uniform vec4 uRip[6];
 uniform float uBirdN;
-uniform vec4 uBird[8];         // x, y, 朝向, 翅膀展开程度
+uniform vec4 uBird[8];         // x, y, heading, wing spread
 out vec4 o;
 
-// ---- 调色板（sRGB）----
-// 海：近岸 → 远处
+// ---- Palette (sRGB) ----
+// Sea: near shore → offshore
 const vec3 SEA0 = vec3(0.74, 0.93, 0.87), SEA1 = vec3(0.47, 0.87, 0.84), SEA2 = vec3(0.17, 0.76, 0.81);
 const vec3 SEA3 = vec3(0.03, 0.66, 0.79), SEA4 = vec3(0.00, 0.56, 0.73);
-// 沙：干 → 最湿（淡紫灰）
+// Sand: dry → wettest (pale lilac-grey)
 const vec3 SAND0 = vec3(0.97, 0.93, 0.88), SAND1 = vec3(0.91, 0.85, 0.84), SAND2 = vec3(0.82, 0.76, 0.79), SAND3 = vec3(0.71, 0.67, 0.75);
 const vec3 FOAM = vec3(0.98, 0.99, 0.98);
-// 湿沙：被水泡过的沙子，比干沙深一点、偏黄（岸边那一圈都往这个颜色靠）
+// Wet sand: water-soaked sand, a little darker and yellower than dry sand (the whole shore band leans toward this colour)
 const vec3 WETSAND = vec3(0.93, 0.86, 0.72);
 
 float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
-// 颗粒和反光点用的随机数（Dave Hoskins 的 hash12）：对整数格子坐标也足够"乱"，不会排成行列
+// Random numbers for grain and glints (Dave Hoskins' hash12): random enough even on integer cell coords, so nothing lines up in rows/columns
 float hash2(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
   p3 += dot(p3, p3.yzx + 33.33);
@@ -390,7 +392,7 @@ vec3 sandRamp(float v) {
   return mix(SAND2, SAND3, v - 2.0);
 }
 mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, s, -s, c); }
-// Worley（细胞）噪声：x = F1，y = F2。F2 - F1 很小的地方是细胞边界 → 用来画光网、碎沫网
+// Worley (cellular) noise: x = F1, y = F2. Where F2 - F1 is small we are on a cell border -> used for caustic nets and foam lace
 vec2 worley(vec2 p) {
   vec2 i = floor(p), f = fract(p);
   float d1 = 8.0, d2 = 8.0;
@@ -402,7 +404,7 @@ vec2 worley(vec2 p) {
   }
   return vec2(sqrt(d1), sqrt(d2));
 }
-// 皮划艇船身：两头尖的梭形，返回有符号距离（<0 在船内）
+// Kayak hull: a spindle pointed at both ends; returns signed distance (<0 inside the hull)
 float hullSD(vec2 q) {
   float L = 22.0, Wd = 5.4;
   float t = clamp(q.x / L, -1.0, 1.0);
@@ -410,7 +412,7 @@ float hullSD(vec2 q) {
   return max(abs(q.y) - w, abs(q.x) - L);
 }
 float segSD(vec2 p, vec2 a, vec2 b) { vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0); return length(pa - ba * h); }
-// 桨：一根细杆 + 两头红色桨叶
+// Paddle: a thin shaft + a red blade at each end
 vec2 paddleSD(vec2 q, float ph) {
   float a = 1.5708 + sin(ph) * 0.55;
   vec2 dir = vec2(cos(a), sin(a)) , c = vec2(0.5, 0.0);
@@ -421,13 +423,13 @@ vec2 paddleSD(vec2 q, float ph) {
   float blade = min(length(l1 / vec2(3.6, 1.6)) - 1.0, length(l2 / vec2(3.6, 1.6)) - 1.0) * 1.6;
   return vec2(shaft, blade);
 }
-// 海鸥（俯视，x 朝前）：返回 (身子, 翅膀, 翅膀上的位置 0 根 → 1 尖)；span = 翅膀展开程度，扇动时变短
+// Gull (top-down, x points forward): returns (body, wing, position along the wing 0 root → 1 tip); span = wing spread, shorter while flapping
 vec3 gullSD(vec2 q, float span) {
   float body = (length((q - vec2(0.8, 0.0)) / vec2(6.2, 1.9)) - 1.0) * 1.9;
   float tail = max(abs(q.y) - 1.4 - (-q.x - 4.0) * 0.25, max(-q.x - 8.5, q.x + 4.0));
   float y = abs(q.y), reach = 15.0 * span;
   float u = clamp((y - 1.0) / reach, 0.0, 1.0);
-  float lead = 1.0 + 1.3 * sin(u * 3.14159) - 4.0 * u * u;     // 前缘：中段微微前凸，翅尖向后掠
+  float lead = 1.0 + 1.3 * sin(u * 3.14159) - 4.0 * u * u;     // leading edge: bulges forward slightly mid-wing, tips swept back
   float chord = mix(4.4, 1.3, u);
   float wing = max(max(q.x - lead, lead - chord - q.x), y - reach - 1.0);
   return vec3(min(body, tail), wing, u);
@@ -436,39 +438,39 @@ vec3 gullSD(vec2 q, float span) {
 void main() {
   vec2 p = vec2(gl_FragCoord.x, uRes.y * uScale - gl_FragCoord.y) / uScale;
   float t = uTime;
-  // 喷绘颗粒：约 1.3px 的随机点（静止，像印刷纸面上的颗粒）
-  vec2 gp = floor(p * (0.78 * max(uScale, 1.0)));   // 按屏幕的实际像素取颗粒（高分屏上不会变成一块块的小方块）
-  // 用 hash2：旧 hash 对整数坐标每几十像素循环一次，最亮的颗粒会排成一格格的点阵
+  // Spray grain: random dots of about 1.3px (static, like grain on printed paper)
+  vec2 gp = floor(p * (0.78 * max(uScale, 1.0)));   // grain at the screen's real pixels (no blocky squares on high-DPI screens)
+  // Use hash2: the old hash repeats every few dozen pixels on integer coords, so the brightest grains lined up in a dot grid
   float g1 = hash2(gp + 0.5), g2 = hash2(gp + 7.3);
   float gAmt = uGrain;
 
   float s0 = mix(fieldS(uFA, p), fieldS(uFB, p), uMix);
   float s = s0 + (N(p, 700.0).r - 0.5) * 10.0;
 
-  // 浪的时钟：沿岸只有大尺度的先后差异，一长段海岸整齐地涌上来
-  float wv = uWave;                                // 浪的大小：放大线宽、水雾
-  float lam = uSpacing;                            // 浪的间距（px）
-  // 沿岸的先后差异要很平缓：用最粗的一层噪声、放大尺度。原来 r 通道带 37px 的细节，
-  // 沿岸走一百来像素浪的节奏就差四分之一拍，新浪的侧边从岸线陡直地立起来，两拍交界处白边戛然而止（像个缺口）
+  // Wave clock: only large-scale timing offsets along the shore, so a long stretch of coast surges in together
+  float wv = uWave;                                // wave size: scales line width and spray
+  float lam = uSpacing;                            // wave spacing (px)
+  // Timing offsets along the shore must be very gentle: use the coarsest noise layer at a larger scale. The r channel used to carry 37px detail,
+  // so ~100px along the shore the wave rhythm drifted a quarter beat; the side of a new wave rose sharply from the shore and the white edge stopped dead where two beats met (looked like a gap)
   float along = N(p, 4200.0).b * 1.2;
-  float u = t * uSpeed / lam + along;             // 每 1.0 = 一道浪
+  float u = t * uSpeed / lam + along;             // each 1.0 = one wave
   float fu = fract(u), cyc = floor(u);
 
-  // 浪的能量：只有开阔海面才起浪。往陆地、往海各探一段：
-  // 陆地太窄（探到对面的水）或水域太小（探不到深水）→ 浪减弱到平静
+  // Wave energy: only open water makes waves. Probe a distance toward land and toward sea:
+  // land too narrow (probe hits water on the other side) or water too small (probe finds no deep water) -> waves fade to calm
   vec2 gr = vec2(dFdx(s0), -dFdy(s0));
   vec2 nrm = length(gr) > 1e-4 ? normalize(gr) : vec2(0.0, 1.0);
   float sIn = mix(fieldS(uFA, p - nrm * 45.0), fieldS(uFB, p - nrm * 45.0), uMix);
   float sOut = mix(fieldS(uFA, p + nrm * 70.0), fieldS(uFB, p + nrm * 70.0), uMix);
   float energy = mix(ss(2.0, -18.0, sIn), 1.0, ss(15.0, 40.0, s)) * ss(25.0, 70.0, sOut);
-  // 沙滩上（冲上来的薄水、湿沙带）用"岸线处"的能量：沿法线回到岸线上再往两边探。
-  // 不能按像素自己的位置探——越往岸上离开阔水面越远、能量越小，薄水冲多远就取决于像素自己在哪，
-  // 岸线一拐弯探的方向变得快，前沿就出现台阶和缺口
-  // sW：薄水层用的"离岸距离"。往岸上走，岸线急拐弯处的等距线会收成尖角（湿痕、水膜前沿出现楔形），
-  // 所以用周围 10px 的平均值把尖角磨圆；贴着水边时仍用原值，水膜和岸线对得上
+  // On the beach (wash-up film, wet sand bands) use the energy "at the shoreline": step back along the normal to the shore, then probe both ways.
+  // Probing from the pixel's own position doesn't work: further up the beach is further from open water and gets less energy, so how far the film reaches would depend on the pixel itself,
+  // and where the shoreline bends the probe direction changes quickly, leaving steps and gaps in the front edge
+  // sW: the "distance to shore" used by the wash-up film. Going up the beach, iso-lines at sharp shoreline bends pinch into corners (wedges in the wet marks and film edge),
+  // so average over the surrounding 10px to round them off; right at the water's edge keep the raw value so the film lines up with the shore
   float shoreE = 0.0, sW = s;
-  if (s < 4.0 && s > -uSigma * 0.78 - 12.0) {         // 只有薄水冲得到的那一条沙滩需要（再往里的干沙不用算）
-    // 法线也用前后左右的差来算：dFdx 在场纹理每个 5px 格子边上会跳，拐角处探的位置跟着跳
+  if (s < 4.0 && s > -uSigma * 0.78 - 12.0) {         // only needed on the strip of beach the film can reach (dry sand further inland is skipped)
+    // Compute the normal from left/right/up/down differences too: dFdx jumps at every 5px cell edge of the field texture, which made the probe position jump at corners
     #define SF(q) mix(fieldS(uFA, q), fieldS(uFB, q), uMix)
     float fR = SF(p + vec2(10.0, 0.0)), fL = SF(p - vec2(10.0, 0.0)), fD = SF(p + vec2(0.0, 10.0)), fU = SF(p - vec2(0.0, 10.0));
     vec2 g10 = vec2(fR - fL, fD - fU);
@@ -481,17 +483,17 @@ void main() {
 
   vec3 col;
   if (s > 2.0) {
-    // ---------- 海 ----------
+    // ---------- Sea ----------
     float depth = pow(clamp(max(s - uShoal * 0.45, 0.0) / (uShallow * 1.3), 0.0, 1.0), 0.62);
-    col = seaRamp(depth + (g1 - 0.5) * 0.09 * gAmt);                               // 颗粒渐变
+    col = seaRamp(depth + (g1 - 0.5) * 0.09 * gAmt);                               // grainy gradient
 
-    // 斑驳光斑：扭曲后的噪声取阈值，边缘用颗粒打散；越近岸越密；缓慢流动
+    // Dappled light: thresholded warped noise, edges broken up with grain; denser near shore; drifts slowly
     vec2 drift = vec2(t * 2.2, t * 0.9);
-    // 海面不画纹理：只有极淡、缓慢流动的大块明暗；深海零星闪烁的阳光反光点
+    // No texture on the sea surface: only very faint, slowly drifting large light/dark patches, plus scattered twinkling sun glints in deep water
     float deepK = ss(uShallow * 0.35, uShallow * 1.1, s);
     col *= 1.0 + (N(p + drift * 4.0, 1600.0).r - 0.5) * 0.07 * ss(0.0, uShoal + 40.0, s);
-    // 阳光反光点：两层大小不同、互相旋转错开的格子，每格随机放一个点（位置、大小、闪烁节奏都随机），
-    // 再按大尺度噪声成片聚集 → 看不出格子
+    // Sun glints: two grids of different sizes, rotated against each other, one dot per cell (random position, size and twinkle rhythm),
+    // then clustered by large-scale noise -> the grid is invisible
     float glitter = ss(0.32, 0.72, N(p + drift * 3.0, 520.0).g) * deepK;
     float spark = 0.0;
     for (int L = 0; L < 2; L++) {
@@ -509,7 +511,7 @@ void main() {
     }
     col = mix(col, vec3(0.95, 1.0, 1.0), spark * 0.85);
 
-    // 透明浅滩：水浅到能看见沙底，越往外越被青绿色盖住（过渡同样用颗粒喷出来）
+    // Clear shallows: water shallow enough to see the sandy bottom, covered by teal further out (the transition is also sprayed with grain)
     float shoal = uShoal;
     float k = clamp(ss(shoal * 0.15, shoal * 1.25, s) + (g2 - 0.5) * 0.16 * gAmt, 0.0, 1.0);
     if (k < 1.0) {
@@ -517,10 +519,10 @@ void main() {
       vec3 tint = mix(vec3(0.93, 0.99, 0.96), vec3(0.62, 0.92, 0.88), ss(0.0, shoal * 0.9, s));
       col = mix(bed * tint, col, k);
     }
-    // 贴岸的一段水底是湿沙：从岸线处的湿沙色慢慢过渡到浅滩的沙底色，和沙滩那边接得上，水里没有一道边
+    // The bottom right next to the shore is wet sand: blend from the wet-sand colour at the shoreline to the shallows' sand colour so it meets the beach with no visible edge in the water
     col = mix(col, mix(sandRamp((g1 - 0.5) * 0.1 * gAmt), WETSAND, 0.6), 1.0 - ss(2.0, 38.0, s));
 
-    // 皮划艇的影子（清澈的水，影子落在海底）
+    // Kayak shadows (clear water, the shadow falls on the sea floor)
     float shadow = 0.0;
     for (int i = 0; i < 4; i++) {
       if (float(i) >= uKayN) break;
@@ -532,7 +534,7 @@ void main() {
     }
     col = mix(col, col * vec3(0.62, 0.78, 0.84), shadow * 0.7);
 
-    // 涟漪：细白圈
+    // Ripples: thin white rings
     float rip = 0.0;
     for (int i = 0; i < 6; i++) {
       vec4 r = uRip[i];
@@ -543,68 +545,68 @@ void main() {
     }
     col = mix(col, FOAM, step(g2, rip * 0.95));
 
-    // ---------- 海里的浪 ----------
+    // ---------- Waves at sea ----------
     float dd = s - 2.0;
-    // 远一点的浪线：向岸推进，到岸的那一刻正好推出一层薄水
+    // The wave line further out: rolls toward shore and pushes out a film of water the moment it lands
     float ph = (s + t * uSpeed) / lam + along;
     float fr = fract(ph);
     float dpx = min(fr, 1.0 - fr) * lam;
-    // 浪从远处推进到岸边：离岸约 1.35 个浪距处淡淡出现，越近越实（海里平时只有一道浪线）；一直推到水边才消失（不提前淡出，
-    // 否则浪线没到岸就没了，到岸那一下的水雾像是凭空冒出来的）
+    // Waves roll in from afar: they appear faintly about 1.35 wave spacings offshore and firm up as they approach (normally only one wave line at sea); they vanish only at the water's edge (no early fade-out,
+    // otherwise the line disappears before landing and the spray when it lands seems to come from nowhere)
     float vis = (1.0 - ss(lam * 0.45, lam * 1.35, s)) * ss(0.0, 4.0, dd) * energy;
-    // 靠近岸开始破碎：浪线变粗、更白，身后的颗粒水雾更多
+    // Breaking near shore: the line gets thicker and whiter, with more grainy spray behind it
     float brk = 1.0 - ss(8.0, 55.0, s);
     float cw = wv * (1.0 + 0.8 * brk);
     float crest = (1.0 - ss(0.7 * cw, 1.9 * cw, dpx)) * vis * (0.55 + 0.4 * brk);
-    float crestSpray = exp(-fr * lam / (7.0 * cw)) * vis * (0.25 + 0.4 * brk);        // 浪线后方的颗粒水雾
-    // 浪到岸的那一刻再轻轻迸一下水雾（只是推上来的浪的延续，不是主角）
+    float crestSpray = exp(-fr * lam / (7.0 * cw)) * vis * (0.25 + 0.4 * brk);        // grainy spray behind the wave line
+    // A light burst of spray the moment the wave lands (just a continuation of the incoming wave, not the main event)
     float burst = exp(-fu * 4.5) * ss(0.0, 0.04, fu);
     float spray = exp(-dd / (6.0 * wv)) * burst * energy * 0.45;
     float foam = max(crest, step(g2, max(spray, crestSpray)));
     col = mix(col, FOAM, foam);
   } else {
-    // ---------- 沙滩（干沙 + 靠水的一窄条常湿带）----------
+    // ---------- Beach (dry sand + a narrow always-wet strip by the water) ----------
     float wet = ss(-7.0 - 3.0 * shoreE, 1.0, s) * 0.2;
     col = mix(sandRamp((g1 - 0.5) * 0.1 * gAmt), WETSAND, wet * 3.0);
-    col *= 1.0 - 0.03 * ss(0.4, 0.8, N(p, 900.0).r) * (1.0 - wet);               // 干沙上极轻的大块明暗
+    col *= 1.0 - 0.03 * ss(0.4, 0.8, N(p, 900.0).r) * (1.0 - wet);               // very faint large light/dark patches on dry sand
   }
 
-  // ---------- 一层层冲上沙滩的薄水 ----------
-  // 同时有 3 层：各自推进 → 停住 → 回落，最高点各不相同；前沿一道颗粒白边，退去后留下慢慢消失的湿痕
-  // 冲得再高也不淹到图标：图标边缘大约在 s ≈ -离岸距离 处，留出余量
-  // ×0.25：开阔岸边冲浪幅度 120 时约冲上 30px，和原来（按像素位置探能量时实际达到的）一样
+  // ---------- Layers of water washing up the beach ----------
+  // 3 layers at once: each advances -> stops -> recedes, each with a different peak; a grainy white edge at the front, leaving a slowly fading wet mark behind
+  // Never reaches the icons however high it runs: icon edges sit at about s ~ -shore offset, leave a margin
+  // ×0.25: on an open shore with runup 120 it reaches about 30px, the same as before (what it actually reached when energy was probed per pixel)
   float reachBase = min(uRunup * 0.25 * shoreE * (0.85 + 0.3 * N(p, 900.0).g), uSigma * 0.78);
-  // 薄水、湿痕不在岸线处一刀切：往海里再延伸一段、慢慢淡出（开阔岸边才有，小水塘里没有浪）
+  // The film and wet marks don't stop sharply at the shoreline: they extend a bit into the sea and fade out (only on open shores; small ponds get no waves)
   float wk = (1.0 - ss(2.0, 38.0, s)) * mix(1.0, energy, ss(2.0, 10.0, s));
   if ((s < 4.0 && reachBase > 0.5) || (s >= 4.0 && wk > 0.01)) {
     const vec3 FILM = WETSAND, MARK = WETSAND * 0.97;
-    float onSand = step(s, 4.0);                                                  // 前沿白边只画在沙滩上
-    // 薄水退去时留下的网状碎沫（跟着回流的水往海里漂）
+    float onSand = step(s, 4.0);                                                  // front white edge drawn on the beach only
+    // Lacy foam left as the film recedes (drifts seaward with the backwash)
     vec2 wl = worley((p - nrm * fu * 8.0) / 7.0);
     float laceNet = (1.0 - ss(0.03, 0.1, wl.y - wl.x)) * ss(0.4, 0.62, N(p + vec2(t * 2.0, 0.0), 120.0).g);
     float wetMem = 0.0, filmA = 0.0;
     vec4 layers[3];
     for (int j = 0; j < 3; j++) {
-      float a = fu + float(j);                                                    // 这一层的"年龄"（单位：一道浪的周期）
+      float a = fu + float(j);                                                    // this layer's "age" (in wave periods)
       float amp = reachBase * (0.5 + 0.5 * hash(vec2(cyc - float(j), 3.7)));
-      float front = a < 0.45 ? mix(3.0, -amp, 1.0 - pow(1.0 - a / 0.45, 2.2))    // 推进：先快后慢
-                             : mix(-amp, 3.0, ss(0.45, 1.4, a));                  // 回落
-      float reached = ss(-amp - 4.0, -amp + 12.0, sW);                         // 边缘很软：不留一道线
+      float front = a < 0.45 ? mix(3.0, -amp, 1.0 - pow(1.0 - a / 0.45, 2.2))    // advance: fast, then slow
+                             : mix(-amp, 3.0, ss(0.45, 1.4, a));                  // recede
+      float reached = ss(-amp - 4.0, -amp + 12.0, sW);                         // very soft edge: leaves no line
       wetMem = max(wetMem, reached * (1.0 - ss(0.45, 2.8, a)) * ss(0.2, 0.45, a));
       float alpha = a < 0.45 ? 0.42 : 0.42 * (1.0 - ss(0.45, 1.4, a));
-      // 回落的水边会越退越薄、没有清楚的边：上沿逐渐羽化，和后面冲上来的浪交叉时不会出现一个硬角（缺口）
+      // Receding water thins out with no clear edge: feather the top edge so crossing the next incoming wave doesn't leave a hard corner (gap)
       float feather = 1.0 + 16.0 * ss(0.45, 1.1, a);
       filmA = max(filmA, ss(front - 1.0, front + feather, sW) * alpha * 1.6);
       layers[j].w = feather;
       layers[j].xyz = vec3(front, a, amp);
     }
-    // 湿痕：水到过的地方沙子更深一点（偏黄的湿沙色），只是淡淡一层
+    // Wet mark: sand the water reached is a little darker (yellowish wet-sand colour), just a faint layer
     col = mix(col, MARK, wetMem * 0.18 * wk);
-    // 冲上来的薄水：几层重叠的地方只算最厚的那层（一层层相乘会越叠越暗）。
-    // 被水盖住的沙子变成偏黄的湿沙色（一部分相乘、保留下面沙子的颗粒；一部分直接往湿沙色靠）。
-    // 不能乘青绿：偏粉的沙子乘上青绿会互相抵消成灰色，岸边一圈发暗
+    // Wash-up film: where layers overlap only the thickest counts (multiplying layer by layer keeps getting darker).
+    // Sand under water turns yellowish wet-sand colour (partly multiplied to keep the sand grain underneath, partly blended straight toward wet sand).
+    // Don't multiply by teal: pinkish sand times teal cancels out to grey and darkens the shore band
     col = mix(col, mix(col * vec3(0.98, 0.96, 0.90), FILM, 0.6), filmA * wk);
-    // 由老到新画薄水层的碎沫和白边
+    // Draw film foam and white edges from oldest to newest
     for (int j = 2; j >= 0; j--) {
       float front = layers[j].x, a = layers[j].y, amp = layers[j].z;
       float cov = ss(front - 1.0, front + layers[j].w, sW);
@@ -612,13 +614,13 @@ void main() {
       col = mix(col, FOAM, lace * 0.75);
       float edgeK = a < 0.45 ? 1.0 : 1.0 - ss(0.45, 1.05, a);
       float d = sW - front;
-      float lineE = (1.0 - ss(0.8 * wv, 1.9 * wv, abs(d - 0.9 * wv))) * edgeK * onSand;    // 前沿白边
-      float sprayE = exp(-max(d, 0.0) / (5.0 * wv)) * cov * edgeK * 0.5 * onSand;         // 白边身后的颗粒水雾
+      float lineE = (1.0 - ss(0.8 * wv, 1.9 * wv, abs(d - 0.9 * wv))) * edgeK * onSand;    // front white edge
+      float sprayE = exp(-max(d, 0.0) / (5.0 * wv)) * cov * edgeK * 0.5 * onSand;         // grainy spray behind the white edge
       col = mix(col, FOAM, max(lineE * 0.95, step(g1, sprayE)));
     }
   }
 
-  // ---------- 皮划艇 ----------
+  // ---------- Kayaks ----------
   for (int i = 0; i < 4; i++) {
     if (float(i) >= uKayN) break;
     vec4 k = uKay[i];
@@ -626,7 +628,7 @@ void main() {
     if (dot(q, q) > 900.0) continue;
     float sd = hullSD(q);
     vec2 pd = paddleSD(q, k.w);
-    // 桨在船下面的部分先画
+    // draw the part of the paddle under the hull first
     vec3 kc = col;
     float a = 0.0;
     float mh = ss(0.7, -0.7, sd);
@@ -635,26 +637,26 @@ void main() {
       float wd = 5.4 * (1.0 - tt * tt);
       vec3 hull = mix(vec3(0.99, 0.84, 0.16), vec3(1.0, 0.93, 0.45), 1.0 - ss(0.2, 0.7, abs(q.y) / max(wd, 0.5)));
       hull = mix(hull, vec3(0.90, 0.64, 0.10), ss(0.78, 1.0, abs(q.y) / max(wd, 0.5)));
-      // 甲板上的白色小圆点（舱口盖）
+      // small white dots on deck (hatch covers)
       hull = mix(hull, vec3(0.97, 0.96, 0.9), 1.0 - ss(1.0, 1.6, length(q - vec2(13.0, 0.0))));
       hull = mix(hull, vec3(0.97, 0.96, 0.9), 1.0 - ss(1.0, 1.6, length(q - vec2(-12.0, 0.0))));
-      // 座舱
+      // cockpit
       hull = mix(hull, vec3(0.30, 0.24, 0.20), 1.0 - ss(0.0, 0.6, length((q - vec2(-1.0, 0.0)) / vec2(6.0, 2.8)) - 1.0));
       kc = mix(kc, hull, mh); a = max(a, mh);
     }
-    // 人：橙色救生衣 + 深色头
+    // paddler: orange life vest + dark head
     float body = ss(0.5, -0.5, length(q - vec2(-1.5, 0.0)) - 3.3);
     kc = mix(kc, vec3(0.96, 0.55, 0.18), body);
     float head = ss(0.5, -0.5, length(q - vec2(0.2, 0.0)) - 2.0);
     kc = mix(kc, vec3(0.22, 0.17, 0.16), head);
-    // 桨
+    // paddle
     float sh = ss(0.5, -0.5, pd.x), bl = ss(0.5, -0.5, pd.y);
     kc = mix(kc, vec3(0.28, 0.24, 0.26), sh);
     kc = mix(kc, vec3(0.90, 0.28, 0.22), bl);
     col = kc;
   }
 
-  // ---------- 海鸟：白身子、浅灰翅膀、黑翅尖的海鸥，飞得高，影子落得远 ----------
+  // ---------- Seabirds: gulls with white bodies, pale grey wings and black wingtips; they fly high so shadows fall far away ----------
   for (int i = 0; i < 8; i++) {
     if (float(i) >= uBirdN) break;
     vec4 b = uBird[i];
@@ -668,12 +670,12 @@ void main() {
       vec3 wingC = mix(vec3(0.80, 0.84, 0.88), vec3(0.20, 0.22, 0.26), ss(0.72, 0.8, g.z));
       col = mix(col, wingC, ss(0.6, -0.6, g.y));
       col = mix(col, vec3(0.99, 0.99, 0.98), ss(0.6, -0.6, g.x));
-      col = mix(col, vec3(0.98, 0.78, 0.22), ss(0.5, -0.5, length(rot(-b.z) * d0 - vec2(7.2, 0.0)) - 0.9));   // 黄嘴
+      col = mix(col, vec3(0.98, 0.78, 0.22), ss(0.5, -0.5, length(rot(-b.z) * d0 - vec2(7.2, 0.0)) - 0.9));   // yellow beak
     }
   }
 
   if (uDebug > 0.5) col = mix(col, vec3(0.9, 0.15, 0.15), 1.0 - ss(0.0, 1.5, abs(s0)));
-  // 印刷感：整体再叠一层极轻的颗粒
+  // Print feel: one more very faint layer of grain over everything
   col *= 1.0 + (g2 - 0.5) * 0.035 * gAmt;
   o = vec4(col, 1.0);
 }`;
@@ -725,7 +727,7 @@ function toHalf(v) {
   if (e >= 31) return sign | 0x7c00;
   return sign | (e << 10) | (m >>> 13);
 }
-// 两张陆地场纹理：from → to 之间插值
+// Two land field textures: interpolate from → to
 const ftex = [null, null];
 let fromI = 0, toI = 0, morphT0 = -1e9, morphDur = MORPH_MS, FA = null, FB = null;
 function allocField() {
@@ -744,7 +746,7 @@ function uploadField(i, Fd) {
   const d = new Uint16Array(Gw * Gh);
   for (let k = 0; k < d.length; k++) d[k] = toHalf(Fd.s[k]);
   gl.bindTexture(gl.TEXTURE_2D, ftex[i]);
-  // R16F 每像素 2 字节；奇数网格宽度时每行不是 4 的倍数，按实际紧凑数据上传。
+  // R16F is 2 bytes per pixel; with an odd grid width rows are not a multiple of 4, so upload tightly packed data.
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Gw, Gh, gl.RED, gl.HALF_FLOAT, d);
 }
@@ -768,7 +770,7 @@ function refresh() {
 }
 
 /* ======================================================================
-   皮划艇：在深水里慢慢划，提前避开陆地和其他船
+   Kayaks: paddle slowly in deep water, steering clear of land and other boats in advance
    ====================================================================== */
 const kayaks = [];
 let curMix = 1;
@@ -787,7 +789,7 @@ function syncKayaks() {
   while (kayaks.length < want) { const k = spawnKayak(); if (!k) break; kayaks.push(k); }
 }
 function stepKayaks(dt, now) {
-  const clearance = 64; // 船身长 44px，连同划桨留出安全间距。
+  const clearance = 64; // hull is 44px long; leave a safe gap including the paddle.
   const plans = [];
   for (let i = 0; i < kayaks.length; i++) {
     const k = kayaks[i];
@@ -795,7 +797,7 @@ function stepKayaks(dt, now) {
     const ax = k.x + Math.cos(k.h) * 70, ay = k.y + Math.sin(k.h) * 70;
     const margin = ax < 40 || ay < 40 || ax > W - 40 || ay > H - TASKBAR - 40;
     if (curS(ax, ay) < 150 || margin) {
-      // 转向更深的水 / 画面中间
+      // turn toward deeper water / the middle of the screen
       let gx = curS(k.x + 10, k.y) - curS(k.x - 10, k.y), gy = curS(k.x, k.y + 10) - curS(k.x, k.y - 10);
       if (margin) { gx += (W / 2 - k.x) * 0.02; gy += ((H - TASKBAR) / 2 - k.y) * 0.02; }
       let d = Math.atan2(gy, gx) - k.h;
@@ -821,7 +823,7 @@ function stepKayaks(dt, now) {
         closing < 0 ? (1 - Math.min(1, closest / 90)) * (1 - ahead / 8) : 0);
       if (risk <= 0) continue;
       avoiding = true;
-      // 相向时都向自己的右侧绕行；交叉或追尾时同时远离另一艘船。
+      // Head-on: both pass to their own right; crossing or overtaking: both steer away from the other boat.
       const awayX = distance > .001 ? -dx / distance : -fy;
       const awayY = distance > .001 ? -dy / distance : fx;
       steerX += (awayX * 2 - fy * 1.6) * risk;
@@ -834,10 +836,10 @@ function stepKayaks(dt, now) {
       heading = k.h + Math.sign(d) * Math.min(Math.abs(d), dt);
     }
     k.ph += dt * 2.4;
-    const v = k.v * (0.75 + 0.25 * Math.abs(Math.sin(k.ph))) * speed; // 划一下快一下
+    const v = k.v * (0.75 + 0.25 * Math.abs(Math.sin(k.ph))) * speed; // surge with each stroke
     plans.push({ h: heading, dx: Math.cos(heading) * v * dt, dy: Math.sin(heading) * v * dt });
   }
-  // 根据同一帧的路线检查最近间距。极端相遇时减速，继续转向，不推开或瞬移船只。
+  // Check the closest approach along this frame's paths. In extreme encounters slow down and keep turning; never push or teleport boats.
   for (let pass = 0; pass < kayaks.length; pass++) {
     for (let i = 0; i < kayaks.length; i++) for (let j = i + 1; j < kayaks.length; j++) {
       const a = plans[i], b = plans[j], dx = kayaks[j].x - kayaks[i].x, dy = kayaks[j].y - kayaks[i].y;
@@ -854,19 +856,19 @@ function stepKayaks(dt, now) {
   for (let i = kayaks.length - 1; i >= 0; i--) {
     const k = kayaks[i], plan = plans[i];
     k.h = plan.h; k.x += plan.dx; k.y += plan.dy;
-    if (curS(k.x, k.y) < 40) { const n = spawnKayak(); if (n) kayaks[i] = n; else kayaks.splice(i, 1); }   // 被陆地"吞掉"就换个地方出现
+    if (curS(k.x, k.y) < 40) { const n = spawnKayak(); if (n) kayaks[i] = n; else kayaks.splice(i, 1); }   // if land "swallows" it, respawn elsewhere
   }
 }
 
 /* ======================================================================
-   海鸟：在画面上空滑翔，时而盘旋、时而扇几下翅膀；飞出画面会兜回来
+   Seabirds: glide over the scene, sometimes circling, sometimes flapping a few times; they loop back if they leave the screen
    ====================================================================== */
 const birds = [];
 const turnToward = (h, target, rate) => { let d = target - h; d = Math.atan2(Math.sin(d), Math.cos(d)); return h + Math.sign(d) * Math.min(Math.abs(d), rate); };
 function spawnBird(fromEdge) {
   const H2 = H - TASKBAR;
   let x = Math.random() * W, y = Math.random() * H2;
-  if (fromEdge) {                                    // 从画面外飞进来
+  if (fromEdge) {                                    // fly in from off-screen
     const side = Math.floor(Math.random() * 4);
     if (side === 0) x = -40; else if (side === 1) x = W + 40; else if (side === 2) y = -40; else y = H2 + 40;
   }
@@ -881,7 +883,7 @@ function syncBirds(fromEdge = true) {
 function stepBirds(dt) {
   const H2 = H - TASKBAR, m = 90;
   birds.forEach((b, i) => {
-    if ((b.modeT -= dt) <= 0) {                       // 换一种飞法：直飞 / 向左或向右盘旋
+    if ((b.modeT -= dt) <= 0) {                       // switch flight mode: straight / circle left or right
       b.mode = Math.random() < 0.4 ? (Math.random() < 0.5 ? -1 : 1) : 0;
       b.modeT = b.mode ? 4 + Math.random() * 6 : 3 + Math.random() * 5;
     }
@@ -890,7 +892,7 @@ function stepBirds(dt) {
       b.h = turnToward(b.h, Math.atan2(H2 / 2 - b.y, W / 2 - b.x), 1.3 * dt);
     else b.h += (b.mode * 0.55 + (vnoise(b.wander, i * 7.3) - 0.5) * 0.8) * dt;
     if ((b.flapT -= dt) <= 0) { b.flap = !b.flap; b.flapT = b.flap ? 0.8 + Math.random() * 1.2 : 2.5 + Math.random() * 4; }
-    if (b.flap || Math.cos(b.ph) < 0.97) b.ph = (b.ph + dt * 9) % (Math.PI * 2);   // 停下时把这一下扇完
+    if (b.flap || Math.cos(b.ph) < 0.97) b.ph = (b.ph + dt * 9) % (Math.PI * 2);   // finish the current flap before stopping
     const v = b.v * (b.flap ? 1.15 : 1);
     b.x += Math.cos(b.h) * v * dt; b.y += Math.sin(b.h) * v * dt;
   });
@@ -898,9 +900,9 @@ function stepBirds(dt) {
 
 
 /* ======================================================================
-   游泳的人
+   Swimmers
    ====================================================================== */
-// 离岸方向（陆地场的梯度，指向海）
+// Seaward direction (gradient of the land field, pointing to sea)
 function seaward(x, y) {
   const gx = curS(x + 8, y) - curS(x - 8, y), gy = curS(x, y + 8) - curS(x, y - 8), l = Math.hypot(gx, gy) || 1;
   return [gx / l, gy / l];
@@ -908,7 +910,7 @@ function seaward(x, y) {
 const inScreen = (x, y, m) => x > m && y > m && x < W - m && y < H - TASKBAR - m;
 
 /* ======================================================================
-   桌面图标（DOM）
+   Desktop icons (DOM)
    ====================================================================== */
 const desktop = document.getElementById('desktop');
 let icons = [], layoutKind = 'mine', selected = null, drag = null, extraIdx = 0, layoutCapacity = 0;
@@ -1013,21 +1015,21 @@ function applyLayout(kind) {
   }
   commit(true);
   kayaks.length = 0;
-  curMix = 1;                                   // 按最终海岸线挑皮划艇的出生点
+  curMix = 1;                                   // pick kayak spawn points from the final shoreline
   syncKayaks();
   curMix = 0;
   if (!birds.length) syncBirds(false);
 }
 
 /* ======================================================================
-   尺寸 / 主循环
+   Size / main loop
    ====================================================================== */
 function resize() {
   W = innerWidth; H = innerHeight;
-  // 预览模式：页面按整块桌面的尺寸排版、再整体缩小显示，所以画布只需要很低的分辨率
+  // Preview mode: the page is laid out at full desktop size and then scaled down, so the canvas needs only a low resolution
   const scale = PREVIEW ? 0.45 : Math.min(devicePixelRatio || 1, P.quality);
-  // 按画布实际占的大小算（带小数：2560 宽的屏幕 150% 缩放是 1706.67，innerWidth 取整成 1707），
-  // 不然画布比屏幕多出一个像素，浏览器会把整幅画缩放一下贴上去，又发糊
+  // Size from the canvas's actual box (fractional: a 2560-wide screen at 150% is 1706.67, innerWidth rounds to 1707),
+  // otherwise the canvas is one pixel larger than the screen, the browser rescales the whole image and it blurs again
   const box = cv.getBoundingClientRect();
   cv.width = Math.round((box.width || W) * scale); cv.height = Math.round((box.height || H) * scale); cv._scale = scale;
   Gw = Math.ceil(W / STEP) + 2; Gh = Math.ceil(H / STEP) + 2;
@@ -1039,7 +1041,7 @@ const T0 = performance.now();
 let lastT = 0, fpsEMA = 0, frameN = 0, frameMs = 0;
 const ripBuf = new Float32Array(24), kayBuf = new Float32Array(16), birdBuf = new Float32Array(32);
 const px = new Uint8Array(4);
-let paused = false;                              // 宿主通知：前台窗口最大化 / 全屏 → 暂停
+let paused = false;                              // host notification: foreground window maximised / fullscreen → pause
 function frame(now) {
   requestAnimationFrame(frame);
   if (paused) { lastT = 0; return; }
@@ -1076,7 +1078,7 @@ function configureBeachPass(now, pass) {
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, ftex[fromI]);
   gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, ftex[toI]);
   gl.uniform1i(U.uNoise, 0); gl.uniform1i(U.uFA, 1); gl.uniform1i(U.uFB, 2);
-  gl.uniform2f(U.uRes, cv.width / cv._scale, cv.height / cv._scale);   // 和画布的实际像素对齐（innerWidth、innerHeight 是取整过的）
+  gl.uniform2f(U.uRes, cv.width / cv._scale, cv.height / cv._scale);   // align with the canvas's actual pixels (innerWidth/innerHeight are rounded)
   gl.uniform2f(U.uGrid, Gw, Gh);
   gl.uniform1f(U.uScale, cv._scale);
   gl.uniform1f(U.uSeed, (seed % 997) * 0.37);
@@ -1095,7 +1097,7 @@ function configureBeachPass(now, pass) {
 }
 
 /* ======================================================================
-   面板
+   Panel
    ====================================================================== */
 const statsEl = document.getElementById('stats');
 const GPU = (() => {
@@ -1106,9 +1108,9 @@ const GPU = (() => {
 })();
 function updateStats() {
   statsEl.innerHTML =
-    `<span class="live">● 动画中 · ${fpsEMA.toFixed(0)} fps</span><br>GPU ${GPU}<br>` +
-    `单帧 ${frameMs.toFixed(1)} ms · 陆地场 ${fieldMs.toFixed(0)} ms<br>` +
-    `画布 ${cv.width}×${cv.height} · 图标 ${icons.length}`;
+    `<span class="live">● animating · ${fpsEMA.toFixed(0)} fps</span><br>GPU ${GPU}<br>` +
+    `frame ${frameMs.toFixed(1)} ms · field ${fieldMs.toFixed(0)} ms<br>` +
+    `canvas ${cv.width}×${cv.height} · icons ${icons.length}`;
 }
 function syncPanel() {
   document.querySelectorAll('.seg button').forEach(b => b.classList.toggle('on', b.dataset.v === layoutKind));
@@ -1142,14 +1144,14 @@ document.getElementById('collapse').addEventListener('click', () => {
   p.classList.toggle('collapsed');
   document.getElementById('collapse').textContent = p.classList.contains('collapsed') ? '+' : '–';
 });
-// 换一张：新的种子（设置窗口的"刷新"、面板上的"换一张"）。已经知道图标在哪了就从头再来一遍开场；
-// 壁纸 / 预览刚打开、还不知道图标在哪的时候只记下种子（等图标来了再按它画）
+// Reseed: a new seed (the settings window's "Refresh", the panel's "New shoreline"). If icon positions are already known, replay the intro from scratch;
+// when wallpaper / preview has just opened and icon positions are unknown, only store the seed (draw with it once the icons arrive)
 let iconsSeen = !(WALL || PREVIEW);
 function reseed(v) {
   seed = v; buildNoise();
   if (!iconsSeen) return;
   commit(true);
-  curMix = 1; kayaks.length = 0; syncKayaks(); curMix = 0;   // 皮划艇按新的海重新放
+  curMix = 1; kayaks.length = 0; syncKayaks(); curMix = 0;   // re-place kayaks for the new sea
 }
 document.getElementById('btnSeed').addEventListener('click', () => reseed((Math.random() * 1e6) | 0));
 document.getElementById('btnAdd').addEventListener('click', () => {
@@ -1192,7 +1194,7 @@ function tickClock() {
 }
 setInterval(tickClock, 15000); tickClock();
 
-/* ---------- 启动 ---------- */
+/* ---------- Startup ---------- */
 window.__dbg = {
   P, applyLayout, kayaks, birds,
   bench() {
@@ -1209,15 +1211,15 @@ else { applyLayout('mine'); syncPanel(); }
 requestAnimationFrame(frame);
 
 /* ======================================================================
-   托管模式：画面由外部驱动
-   - 壁纸模式（?wallpaper=1）：桌面宿主 host/Terrarium.exe 通过 WebView2 发消息
-   - 预览模式（?preview=1）：设置窗口（settings.html）通过 iframe 的 postMessage 发消息
-   消息：icons（真实图标矩形，物理像素）/ settings（参数，部分更新）/ reset（恢复默认）/ pause
+   Hosted mode: the scene is driven from outside
+   - Wallpaper mode (?wallpaper=1): the desktop host host/Terrarium.exe sends messages via WebView2
+   - Preview mode (?preview=1): the settings window (settings.html) sends messages via iframe postMessage
+   Messages: icons (real icon rects, physical pixels) / settings (parameters, partial update) / reset (restore defaults) / pause
    ====================================================================== */
-// 应用设置：只处理认识的参数；岸线相关的要重算陆地场，精度要重建画布，皮划艇要增减
+// Apply settings: only known parameters are handled; shoreline ones recompute the land field, quality rebuilds the canvas, kayaks are added/removed
 function applySettings(v) {
-  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);   // 设置窗口的"刷新"：换一张（桌面和预览用同一个种子）
-  // 只接受面板上有的参数：已经去掉的选项（颗粒感、渲染精度）即使旧的设置文件里还存着也不生效
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);   // the settings window's "Refresh": reseed (desktop and preview share one seed)
+  // Only accept parameters that are on the panel: removed options (grain, render quality) have no effect even if an old settings file still has them
   let field = false, kay = false, bird = false;
   for (const k in v) {
     if (!SLIDERS.some(s => s.key === k) || typeof v[k] !== typeof P[k] || P[k] === v[k]) continue;
@@ -1243,12 +1245,12 @@ function startHostedMode() {
     const g = document.createElement('div'); g.id = 'ghosts'; document.body.appendChild(g);
   }
   icons = [];
-  commit(true);                                   // 先是一片海
+  commit(true);                                   // start with open sea
   syncBirds(false);
   let first = true;
   const settlePaused = () => {
     if (!paused || !iconsSeen) return;
-    curMix = 1; morphT0 = -1e9;                  // 暂停只冻结动画，首次地形和图标布局仍要完成
+    curMix = 1; morphT0 = -1e9;                  // pausing only freezes animation; the first terrain and icon layout must still complete
     draw(performance.now());
   };
   const handle = m => {
@@ -1256,11 +1258,11 @@ function startHostedMode() {
     if (m.t === 'settings') { applySettings(m.v || {}); return; }
     if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
     if (m.t !== 'icons') return;
-    const k = window.devicePixelRatio || 1;       // 物理像素 → CSS 像素
+    const k = window.devicePixelRatio || 1;       // physical pixels → CSS pixels
     icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
     if (PREVIEW) drawGhosts();
     iconsSeen = true;
-    commit(first);                                // 第一次：陆地从海里"长"出来；之后：岸线平滑移动
+    commit(first);                                // first time: land "grows" out of the sea; afterwards: the shoreline moves smoothly
     if (first) { curMix = 1; kayaks.length = 0; syncKayaks(); curMix = 0; first = false; }
     settlePaused();
   };
@@ -1275,6 +1277,6 @@ function startHostedMode() {
   host.postMessage('ready');
 }
 </script>
-<script src="share.js"></script>   <!-- 分享图片 / 分享动画（示例图标、名字是色块） -->
+<script src="share.js"></script>   <!-- Share image / share animation (sample icons, names drawn as colour blocks) -->
 </body>
 </html>

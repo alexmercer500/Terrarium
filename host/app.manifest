@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
   <assemblyIdentity version="1.0.0.0" name="Terrarium.app"/>
-  <!-- 声明支持 Windows 8–11：分层子窗口（WS_EX_LAYERED + WS_CHILD）需要这个声明才会生效 -->
+  <!-- Declares support for Windows 8-11: layered child windows (WS_EX_LAYERED + WS_CHILD) only work with this declaration -->
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
       <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>

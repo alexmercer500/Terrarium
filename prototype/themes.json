@@ -4,8 +4,8 @@
     {
       "id": "meadow",
       "adaptive": true,
-      "name": "草地",
-      "desc": "钢笔淡彩的草地，图标藏在白云里，云影是一块块深绿",
+      "name": "Meadow",
+      "desc": "A pen-and-wash meadow where your icons hide in white clouds that cast dark green shadows",
       "page": "meadow.html",
       "status": "ready",
       "product": "free",
@@ -13,12 +13,12 @@
       "thumbSource": "custom",
       "groups": [
         {
-          "name": "图标周围",
+          "name": "Around icons",
           "params": [
             {
               "key": "sigma",
-              "label": "云团大小",
-              "hint": "图标所在的云从图标往外铺多远",
+              "label": "Cloud size",
+              "hint": "How far the clouds around your icons spread out",
               "min": 40,
               "max": 200,
               "step": 1,
@@ -28,12 +28,12 @@
           ]
         },
         {
-          "name": "云",
+          "name": "Clouds",
           "params": [
             {
               "key": "cover",
-              "label": "草地上的云",
-              "hint": "空旷的草地上空零星飘着的云有多少",
+              "label": "Clouds over the meadow",
+              "hint": "How many clouds drift over the open meadow",
               "min": 0,
               "max": 1,
               "step": 0.01,
@@ -42,8 +42,8 @@
             },
             {
               "key": "flow",
-              "label": "流动速度",
-              "hint": "云飘多快、云团的鼓包变化多快",
+              "label": "Drift speed",
+              "hint": "How fast the clouds drift and their puffs change",
               "min": 0,
               "max": 3,
               "step": 0.05,
@@ -53,25 +53,25 @@
           ]
         },
         {
-          "name": "角色",
+          "name": "Characters",
           "params": [
             {
               "key": "showBoy",
-              "label": "显示男孩",
-              "hint": "男孩和他手中的风筝一起显示或隐藏",
+              "label": "Show boy",
+              "hint": "Show or hide the boy together with his kite",
               "options": [
-                "隐藏",
-                "显示"
+                "Hide",
+                "Show"
               ],
               "default": 1
             },
             {
               "key": "showCat",
-              "label": "显示小猫",
-              "hint": "躺在草地上的小黑猫",
+              "label": "Show kitten",
+              "hint": "The little black kitten resting on the grass",
               "options": [
-                "隐藏",
-                "显示"
+                "Hide",
+                "Show"
               ],
               "default": 1
             }
@@ -81,8 +81,8 @@
     },
     {
       "id": "beach",
-      "name": "沙滩",
-      "desc": "海岸线绕着你的文件弯曲，海浪一层层冲上沙滩",
+      "name": "Beach",
+      "desc": "The shoreline curves around your files as waves roll up the sand",
       "page": "flat.html",
       "status": "ready",
       "product": "free",
@@ -90,12 +90,12 @@
       "thumbSource": "custom",
       "groups": [
         {
-          "name": "岸线",
+          "name": "Shoreline",
           "params": [
             {
               "key": "sigma",
-              "label": "离岸距离",
-              "hint": "海岸线离图标多远",
+              "label": "Distance from icons",
+              "hint": "How far the shoreline sits from your icons",
               "min": 40,
               "max": 200,
               "step": 1,
@@ -104,8 +104,8 @@
             },
             {
               "key": "warp",
-              "label": "海岸曲折",
-              "hint": "岸线弯弯绕绕的程度",
+              "label": "Winding coast",
+              "hint": "How much the shoreline twists and turns",
               "min": 0,
               "max": 80,
               "step": 1,
@@ -114,12 +114,12 @@
           ]
         },
         {
-          "name": "海水",
+          "name": "Water",
           "params": [
             {
               "key": "shoal",
-              "label": "透明浅滩",
-              "hint": "能看见沙底的浅水有多宽",
+              "label": "Clear shallows",
+              "hint": "How wide the see-through water over the sand is",
               "min": 0,
               "max": 300,
               "step": 1,
@@ -128,8 +128,8 @@
             },
             {
               "key": "shallow",
-              "label": "浅海宽度",
-              "hint": "从青绿过渡到深蓝的距离",
+              "label": "Shallow sea",
+              "hint": "How far the water fades from turquoise to deep blue",
               "min": 120,
               "max": 700,
               "step": 1,
@@ -139,36 +139,33 @@
           ]
         },
         {
-          "name": "元素",
+          "name": "Details",
           "params": [
             {
               "key": "palms",
-              "label": "椰子树数量",
-              "hint": "沿岸椰子树的数量，设为 0 可隐藏；沙地不足时会减少显示",
+              "label": "Coconut palms",
+              "hint": "Number of coastal palms; 0 to hide. Fewer appear if there is not enough sand.",
               "min": 0,
               "max": 10,
               "step": 1,
-              "default": 4,
-              "unit": "棵"
+              "default": 4
             },
             {
               "key": "kayaks",
-              "label": "皮划艇",
+              "label": "Kayaks",
               "min": 0,
               "max": 4,
               "step": 1,
-              "default": 2,
-              "unit": "艘"
+              "default": 2
             },
             {
               "key": "birds",
-              "label": "海鸟",
-              "hint": "在上空滑翔、盘旋的海鸥",
+              "label": "Seabirds",
+              "hint": "Gulls gliding and circling overhead",
               "min": 0,
               "max": 8,
               "step": 1,
-              "default": 3,
-              "unit": "只"
+              "default": 3
             }
           ]
         }
@@ -177,20 +174,20 @@
     {
       "id": "space",
       "adaptive": true,
-      "name": "星空",
-      "desc": "扁平插画风的深蓝夜空，图标浮在柔光星云里，星星闪烁，偶有流星划过，一颗带环的小行星缓缓环绕",
+      "name": "Night Sky",
+      "desc": "A flat-illustrated navy night where your icons float in softly glowing nebulae, with twinkling stars, the odd shooting star and a small ringed planet drifting by",
       "page": "space.html",
       "status": "ready",
       "product": "free",
       "thumb": "url(thumbs/space.webp?v=548f1dc579) center / cover no-repeat, radial-gradient(circle at 78% 30%, #f6d2b0 0 2.2%, transparent 2.6%), radial-gradient(ellipse 7% 2% at 78% 30%, transparent 55%, #b9addf 60%, #b9addf 80%, transparent 85%), radial-gradient(circle at 18% 72%, #fff 0 0.35%, transparent 0.6%), radial-gradient(circle at 62% 14%, #fff 0 0.35%, transparent 0.6%), radial-gradient(circle at 90% 80%, #fff 0 0.3%, transparent 0.55%), radial-gradient(circle at 46% 86%, #fff 0 0.3%, transparent 0.55%), radial-gradient(ellipse 30% 26% at 22% 34%, #7d3a72 0%, #5a2f86 55%, #33225f 78%, transparent 82%), radial-gradient(ellipse 26% 22% at 58% 62%, #2a6478 0%, #22506a 55%, #1d2f55 78%, transparent 82%), radial-gradient(ellipse 18% 15% at 86% 56%, #5a3a92 0%, #3c2a6e 60%, transparent 80%), linear-gradient(170deg, #070a1f 0%, #0d0f2a 50%, #1b1442 100%)",
       "groups": [
         {
-          "name": "图标周围",
+          "name": "Around icons",
           "params": [
             {
               "key": "sigma",
-              "label": "星云大小",
-              "hint": "图标所在的星云从图标往外铺多远",
+              "label": "Nebula size",
+              "hint": "How far the nebula around your icons spreads out",
               "min": 40,
               "max": 200,
               "step": 1,
@@ -200,12 +197,12 @@
           ]
         },
         {
-          "name": "星空",
+          "name": "Starry sky",
           "params": [
             {
               "key": "stars",
-              "label": "星星密度",
-              "hint": "夜空里星星有多密",
+              "label": "Star density",
+              "hint": "How many stars fill the night sky",
               "min": 0,
               "max": 1,
               "step": 0.01,
@@ -214,8 +211,8 @@
             },
             {
               "key": "twinkle",
-              "label": "闪烁速度",
-              "hint": "星星闪烁得多快",
+              "label": "Twinkle speed",
+              "hint": "How quickly the stars twinkle",
               "min": 0,
               "max": 3,
               "step": 0.05,
@@ -224,8 +221,8 @@
             },
             {
               "key": "shooting",
-              "label": "流星",
-              "hint": "流星划过空旷夜空的频率，不会经过图标",
+              "label": "Shooting stars",
+              "hint": "How often a shooting star crosses the open sky; they never cross your icons",
               "min": 0,
               "max": 1,
               "step": 0.01,
@@ -235,15 +232,15 @@
           ]
         },
         {
-          "name": "行星",
+          "name": "Planet",
           "params": [
             {
               "key": "showPlanet",
-              "label": "显示行星",
-              "hint": "在空旷处缓缓环绕的带环小行星和它的卫星",
+              "label": "Show planet",
+              "hint": "The small ringed planet and its moon slowly circling in open sky",
               "options": [
-                "隐藏",
-                "显示"
+                "Hide",
+                "Show"
               ],
               "default": 1
             }
@@ -255,20 +252,20 @@
     {
       "id": "snow",
       "adaptive": true,
-      "name": "雪山",
-      "desc": "俯瞰的冬日雪林，图标落在蓝灰色的雪地空地里，积雪的松林沿空地边缘生长，小木屋炊烟袅袅，细雪随风飘落",
+      "name": "Snowy Mountains",
+      "desc": "A top-down winter forest: your icons rest in soft blue-grey snowy clearings ringed by snow-capped pines, with a smoking cabin and gentle wind-blown snowfall",
       "page": "snow.html",
       "status": "ready",
       "product": "free",
       "thumb": "url(thumbs/snow.webp?v=58b8c045f8) center / cover no-repeat, radial-gradient(ellipse 17% 24% at 22% 40%, #8b9cb4 0 58%, transparent 74%), radial-gradient(ellipse 13% 18% at 56% 62%, #91a2b9 0 56%, transparent 74%), radial-gradient(ellipse 4% 5% at 77% 48%, #dfe7f1 0 55%, #6b5240 60% 75%, transparent 80%), radial-gradient(ellipse 9% 12% at 77% 50%, #8d9eb6 0 60%, transparent 76%), radial-gradient(circle at 40% 38%, #dfe8f2 0 10%, #2c4a43 13% 44%, transparent 47%) 0 0 / 18px 18px, radial-gradient(circle at 45% 42%, #d7e1ec 0 9%, #23403a 12% 42%, transparent 45%) 9px 10px / 18px 18px, linear-gradient(160deg, #4d6470 0%, #2b4044 100%)",
       "groups": [
         {
-          "name": "图标周围",
+          "name": "Around icons",
           "params": [
             {
               "key": "sigma",
-              "label": "空地大小",
-              "hint": "图标周围的雪地空地从图标往外铺多远",
+              "label": "Clearing size",
+              "hint": "How far the snowy clearing spreads out around your icons",
               "min": 40,
               "max": 200,
               "step": 1,
@@ -278,12 +275,12 @@
           ]
         },
         {
-          "name": "森林",
+          "name": "Forest",
           "params": [
             {
               "key": "trees",
-              "label": "森林密度",
-              "hint": "空地以外的松林有多密，越低林间空地越多",
+              "label": "Forest density",
+              "hint": "How dense the pine forest is outside the clearings; lower opens more glades",
               "min": 0,
               "max": 1,
               "step": 0.01,
@@ -292,23 +289,23 @@
             },
             {
               "key": "showCabin",
-              "label": "显示小木屋",
-              "hint": "远离图标的空地上一座冒着炊烟的小木屋",
+              "label": "Show cabin",
+              "hint": "A small cabin with a smoking chimney in a spot away from your icons",
               "options": [
-                "隐藏",
-                "显示"
+                "Hide",
+                "Show"
               ],
               "default": 1
             }
           ]
         },
         {
-          "name": "飘雪",
+          "name": "Snowfall",
           "params": [
             {
               "key": "snowfall",
-              "label": "雪量",
-              "hint": "飘落的雪花有多少",
+              "label": "Snowfall",
+              "hint": "How many snowflakes drift across the screen",
               "min": 0,
               "max": 1,
               "step": 0.01,
@@ -317,8 +314,8 @@
             },
             {
               "key": "wind",
-              "label": "风力",
-              "hint": "风吹雪花、炊烟和云影的速度",
+              "label": "Wind",
+              "hint": "How fast the wind carries the snow, the chimney smoke and the cloud shadows",
               "min": 0,
               "max": 3,
               "step": 0.05,
@@ -333,20 +330,20 @@
     {
       "id": "reef",
       "adaptive": true,
-      "name": "珊瑚礁",
-      "desc": "俯瞰清浅的热带海，图标落在彩色珊瑚环绕的沙地上，鱼群绕着礁石游过",
+      "name": "Coral Reef",
+      "desc": "A shallow tropical sea from above: each icon rests on a sandy reef flat ringed by colourful coral, while schools of fish glide around the reefs",
       "page": "reef.html",
       "status": "ready",
       "product": "free",
       "thumb": "url(thumbs/reef.webp?v=4866681fc2) center / cover no-repeat, radial-gradient(circle at 30% 34%, #c8a978 0 9%, #e98a72 10% 12%, #9a6fc4 13% 14%, rgba(78,170,180,.55) 16%, transparent 24%), radial-gradient(circle at 74% 70%, #c8a978 0 7%, #f0a14a 8% 10%, #d9b04a 11% 12%, rgba(78,170,180,.55) 14%, transparent 21%), radial-gradient(circle at 82% 22%, #e98a72 0 3%, rgba(78,170,180,.45) 5%, transparent 10%), linear-gradient(90deg, #c6a675 0 13%, #e98a72 14% 15%, #3f9fae 18%, transparent 30%), linear-gradient(160deg, #0f6a86 0%, #0b4a6e 100%)",
       "groups": [
         {
-          "name": "图标周围",
+          "name": "Around icons",
           "params": [
             {
               "key": "sigma",
-              "label": "礁盘大小",
-              "hint": "图标脚下的沙地和珊瑚环从图标往外铺多远",
+              "label": "Reef size",
+              "hint": "How far the sand and coral ring spread out around your icons",
               "min": 40,
               "max": 200,
               "step": 1,
@@ -356,12 +353,12 @@
           ]
         },
         {
-          "name": "海水",
+          "name": "Water",
           "params": [
             {
               "key": "caustics",
-              "label": "水底光纹",
-              "hint": "阳光透过水面在沙底上晃动的光纹有多亮",
+              "label": "Caustics",
+              "hint": "How bright the rippling sunlight patterns on the sea floor are",
               "min": 0,
               "max": 1,
               "step": 0.01,
@@ -370,8 +367,8 @@
             },
             {
               "key": "flow",
-              "label": "游动速度",
-              "hint": "鱼群和海龟游多快、水纹晃得多快",
+              "label": "Swim speed",
+              "hint": "How fast the fish and the turtle swim and the light ripples move",
               "min": 0,
               "max": 3,
               "step": 0.05,
@@ -381,12 +378,12 @@
           ]
         },
         {
-          "name": "海洋生物",
+          "name": "Sea life",
           "params": [
             {
               "key": "fish",
-              "label": "鱼群",
-              "hint": "开阔水域里游着多少群小鱼",
+              "label": "Fish",
+              "hint": "How many schools of small fish swim through the open water",
               "min": 0,
               "max": 1,
               "step": 0.01,
@@ -395,11 +392,11 @@
             },
             {
               "key": "showTurtle",
-              "label": "显示海龟",
-              "hint": "偶尔有一只海龟从水面下慢慢游过",
+              "label": "Show sea turtle",
+              "hint": "Now and then a sea turtle glides slowly past",
               "options": [
-                "隐藏",
-                "显示"
+                "Hide",
+                "Show"
               ],
               "default": 1
             }
@@ -411,20 +408,20 @@
     {
       "id": "city",
       "adaptive": true,
-      "name": "城市",
-      "desc": "俯瞰的迷你城市，每个图标都在一小片公园里，街上车来车往，昼夜跟着时钟变化",
+      "name": "City",
+      "desc": "A miniature city seen from above: every icon sits in a little park, cars drive the streets, and day turns to night with your clock",
       "page": "city.html",
       "status": "ready",
       "product": "free",
       "thumb": "url(thumbs/city.webp?v=daed1651a5) center / cover no-repeat, radial-gradient(ellipse 20% 34% at 14% 42%, #578b4a 62%, #8fae72 66%, transparent 71%), radial-gradient(ellipse 13% 19% at 66% 58%, #578b4a 60%, #8fae72 65%, transparent 70%), repeating-linear-gradient(90deg, transparent 0 16%, #5d636b 16% 18.5%), repeating-linear-gradient(0deg, transparent 0 23%, #5d636b 23% 26%), linear-gradient(135deg, #e3c8aa 0%, #c3c9d1 35%, #d8b196 65%, #b9c3cc 100%)",
       "groups": [
         {
-          "name": "图标周围",
+          "name": "Around icons",
           "params": [
             {
               "key": "sigma",
-              "label": "公园大小",
-              "hint": "图标所在的公园从图标往外铺多远",
+              "label": "Park size",
+              "hint": "How far the park around your icons spreads out",
               "min": 24,
               "max": 120,
               "step": 1,
@@ -434,12 +431,12 @@
           ]
         },
         {
-          "name": "街道",
+          "name": "Streets",
           "params": [
             {
               "key": "traffic",
-              "label": "车流",
-              "hint": "街上的车有多少",
+              "label": "Traffic",
+              "hint": "How many cars are on the streets",
               "min": 0,
               "max": 1,
               "step": 0.01,
@@ -448,35 +445,35 @@
             },
             {
               "key": "showCars",
-              "label": "显示汽车",
-              "hint": "街上行驶的汽车和公交车",
+              "label": "Show cars",
+              "hint": "Cars and buses driving through the city",
               "options": [
-                "隐藏",
-                "显示"
+                "Hide",
+                "Show"
               ],
               "default": 1
             }
           ]
         },
         {
-          "name": "时间",
+          "name": "Time of day",
           "params": [
             {
               "key": "timeMode",
-              "label": "时段",
-              "hint": "自动：跟着电脑的时钟，白天、黄昏、夜晚依次变化",
+              "label": "Time of day",
+              "hint": "Auto follows your computer's clock through day, dusk and night",
               "options": [
-                "自动",
-                "白天",
-                "黄昏",
-                "夜晚"
+                "Auto",
+                "Day",
+                "Dusk",
+                "Night"
               ],
               "default": 0
             },
             {
               "key": "windows",
-              "label": "亮灯的窗户",
-              "hint": "夜晚有多少窗户亮着灯",
+              "label": "Lit windows",
+              "hint": "How many windows glow at night",
               "min": 0,
               "max": 1,
               "step": 0.01,

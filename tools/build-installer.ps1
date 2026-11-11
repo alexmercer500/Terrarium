@@ -38,7 +38,7 @@ $WebView2Bootstrapper = [IO.Path]::GetFullPath($WebView2Bootstrapper)
 $sources = @('.gitattributes', '.gitignore', 'AGENTS.md', 'LICENSE', 'NOTICE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'TRADEMARKS.md',
     'host\DesktopHost.cs', 'host\Terrarium.ico', 'host\README.md', 'host\app.manifest', 'host\build.ps1', 'host\inspect.ps1',
     'tools\build-installer.ps1', 'tools\installer.nsi', 'tools\version.json')
-$themeFiles = @('settings.html', 'thumbs-data.js', 'share.js', 'serve.mjs', 'themes.json', 'i18n\en.json', 'i18n\zh-CN.json')
+$themeFiles = @('settings.html', 'thumbs-data.js', 'share.js', 'serve.mjs', 'themes.json', 'i18n\en.json')
 $themes = (Get-Content -LiteralPath (Join-Path $root 'prototype\themes.json') -Raw -Encoding UTF8 | ConvertFrom-Json).themes
 if ($themes.Count -lt 1) { throw 'themes.json lists no themes' }
 # Every theme must be a complete, free, ready theme; its page plus the scripts and images it references are packaged.
