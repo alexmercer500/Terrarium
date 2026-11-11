@@ -502,7 +502,7 @@ class HostContext : ApplicationContext
                 if (lastShare != null && File.Exists(lastShare)) Process.Start(lastShare);
                 break;
             case "openWebsite":
-                Process.Start("https://github.com/alexmercer500/Deskland");
+                Process.Start("https://github.com/alexmercer500/Terrarium");
                 break;
             case "revealShare":
                 if (lastShare != null && File.Exists(lastShare)) Process.Start("explorer.exe", "/select,\"" + lastShare + "\"");
