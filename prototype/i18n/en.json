@@ -199,6 +199,152 @@
           ]
         }
       }
+    },
+    "space": {
+      "name": "Night Sky",
+      "desc": "A flat-illustrated navy night where your icons float in softly glowing nebulae, with twinkling stars, the odd shooting star and a small ringed planet drifting by",
+      "groups": [
+        "Around icons",
+        "Starry sky",
+        "Planet"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Nebula size",
+          "hint": "How far the nebula around your icons spreads out"
+        },
+        "stars": {
+          "label": "Star density",
+          "hint": "How many stars fill the night sky"
+        },
+        "twinkle": {
+          "label": "Twinkle speed",
+          "hint": "How quickly the stars twinkle"
+        },
+        "shooting": {
+          "label": "Shooting stars",
+          "hint": "How often a shooting star crosses the open sky; they never cross your icons"
+        },
+        "showPlanet": {
+          "label": "Show planet",
+          "hint": "The small ringed planet and its moon slowly circling in open sky",
+          "options": [
+            "Hide",
+            "Show"
+          ]
+        }
+      }
+    },
+    "snow": {
+      "name": "Snowy Mountains",
+      "desc": "A top-down winter forest: your icons rest in soft blue-grey snowy clearings ringed by snow-capped pines, with a smoking cabin and gentle wind-blown snowfall",
+      "groups": [
+        "Around icons",
+        "Forest",
+        "Snowfall"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Clearing size",
+          "hint": "How far the snowy clearing spreads out around your icons"
+        },
+        "trees": {
+          "label": "Forest density",
+          "hint": "How dense the pine forest is outside the clearings; lower opens more glades"
+        },
+        "showCabin": {
+          "label": "Show cabin",
+          "hint": "A small cabin with a smoking chimney in a spot away from your icons",
+          "options": [
+            "Hide",
+            "Show"
+          ]
+        },
+        "snowfall": {
+          "label": "Snowfall",
+          "hint": "How many snowflakes drift across the screen"
+        },
+        "wind": {
+          "label": "Wind",
+          "hint": "How fast the wind carries the snow, the chimney smoke and the cloud shadows"
+        }
+      }
+    },
+    "reef": {
+      "name": "Coral Reef",
+      "desc": "A shallow tropical sea from above: each icon rests on a sandy reef flat ringed by colourful coral, while schools of fish glide around the reefs",
+      "groups": [
+        "Around icons",
+        "Water",
+        "Sea life"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Reef size",
+          "hint": "How far the sand and coral ring spread out around your icons"
+        },
+        "caustics": {
+          "label": "Caustics",
+          "hint": "How bright the rippling sunlight patterns on the sea floor are"
+        },
+        "flow": {
+          "label": "Swim speed",
+          "hint": "How fast the fish and the turtle swim and the light ripples move"
+        },
+        "fish": {
+          "label": "Fish",
+          "hint": "How many schools of small fish swim through the open water"
+        },
+        "showTurtle": {
+          "label": "Show sea turtle",
+          "hint": "Now and then a sea turtle glides slowly past",
+          "options": [
+            "Hide",
+            "Show"
+          ]
+        }
+      }
+    },
+    "city": {
+      "name": "City",
+      "desc": "A miniature city seen from above: every icon sits in a little park, cars drive the streets, and day turns to night with your clock",
+      "groups": [
+        "Around icons",
+        "Streets",
+        "Time of day"
+      ],
+      "params": {
+        "sigma": {
+          "label": "Park size",
+          "hint": "How far the park around your icons spreads out"
+        },
+        "traffic": {
+          "label": "Traffic",
+          "hint": "How many cars are on the streets"
+        },
+        "showCars": {
+          "label": "Show cars",
+          "hint": "Cars and buses driving through the city",
+          "options": [
+            "Hide",
+            "Show"
+          ]
+        },
+        "timeMode": {
+          "label": "Time of day",
+          "hint": "Auto follows your computer's clock through day, dusk and night",
+          "options": [
+            "Auto",
+            "Day",
+            "Dusk",
+            "Night"
+          ]
+        },
+        "windows": {
+          "label": "Lit windows",
+          "hint": "How many windows glow at night"
+        }
+      }
     }
   }
 }

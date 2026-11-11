@@ -1,0 +1,1150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terrarium · Night Sky (prototype)</title>
+<!--
+  Terrarium · Night Sky theme (top-down flat illustration; pure WebGL2, 2D, computed every frame)
+  - Deep navy / indigo sky with a faint Milky Way band and dust lanes.
+  - Around every desktop icon: soft glowing nebula "islands" (violet / teal / rose wash) built from the same
+    CPU signed-distance field as the meadow theme. Three flat tonal layers with lighter inner rims; the edges
+    drift and breathe slowly. The area right under the icons stays mid-to-dark so white labels read well.
+  - Three starfield layers with parallax drift and gentle twinkle (one hash cell per layer per pixel).
+  - Shooting stars and a small ringed planet with a moon are drawn as small blended quads (local passes),
+    never as per-pixel loops in the fullscreen shader. Both stay out of the icon / nebula regions.
+-->
+<style>
+  :root { --taskbar: 48px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0d26; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
+
+  .icon {
+    position: absolute; width: 76px; padding: 4px 2px 5px;
+    display: flex; flex-direction: column; align-items: center;
+    border: 1px solid transparent; border-radius: 4px;
+    user-select: none; touch-action: none; cursor: default;
+  }
+  .icon:hover { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.24); }
+  .icon.sel { background: rgba(0,120,215,.34); border-color: rgba(140,200,255,.7); }
+  .icon.drag { opacity: .88; z-index: 10; transform: scale(1.04); }
+  .icon.settle { transition: left .22s cubic-bezier(.2,.8,.3,1), top .22s cubic-bezier(.2,.8,.3,1); }
+  .icon.born { animation: born .45s cubic-bezier(.2,.9,.3,1.2); }
+  @keyframes born { from { opacity: 0; transform: scale(.6); } }
+  .glyph { width: 48px; height: 48px; filter: drop-shadow(0 1px 1px rgba(0,0,0,.25)) drop-shadow(3px 6px 4px rgba(10,8,30,.35)); pointer-events: none; }
+  .glyph svg { width: 100%; height: 100%; display: block; }
+  .label {
+    margin-top: 3px; max-width: 72px; font-size: 12px; line-height: 15px; color: #fff; text-align: center;
+    text-shadow: 0 0 2px rgba(0,0,0,.95), 0 1px 3px rgba(0,0,0,.85);
+    word-break: break-all; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    pointer-events: none;
+  }
+
+  #taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--taskbar);
+    background: rgba(20,22,34,.62); backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    border-top: 1px solid rgba(255,255,255,.08);
+    display: flex; align-items: center; justify-content: center; z-index: 40;
+  }
+  #taskbar .apps { display: flex; gap: 4px; }
+  #taskbar .app { width: 40px; height: 40px; border-radius: 4px; display: grid; place-items: center; }
+  #taskbar .app:hover { background: rgba(255,255,255,.08); }
+  #taskbar .app svg { width: 24px; height: 24px; }
+  #clock { position: absolute; right: 14px; color: #fff; font-size: 12px; line-height: 16px; text-align: right; }
+
+  #panel {
+    position: fixed; top: 14px; right: 14px; width: 284px; max-height: calc(100vh - var(--taskbar) - 28px); overflow: auto;
+    background: rgba(22,20,52,.76); backdrop-filter: blur(18px) saturate(1.3); -webkit-backdrop-filter: blur(18px) saturate(1.3);
+    color: #eeeefa; border: 1px solid rgba(255,255,255,.14); border-radius: 12px;
+    font-size: 12px; line-height: 1.4; box-shadow: 0 12px 32px rgba(0,0,0,.35); z-index: 50;
+  }
+  #panel.hidden { display: none; }
+  /* Wallpaper mode (?wallpaper=1, loaded by the desktop host): Windows draws the real icons and taskbar */
+  body.wall #panel, body.wall #taskbar, body.wall #desktop { display: none; }
+  /* Preview mode (?preview=1, inside the settings window): translucent boxes mark the real icon positions */
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.preview #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(5,5,25,.4); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+  #panel header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 10px; }
+  #panel header b { font-size: 14px; letter-spacing: .06em; }
+  #panel header span { margin-left: 8px; opacity: .55; }
+  #panel.collapsed .body { display: none; }
+  .ibtn { background: none; border: 0; color: inherit; opacity: .6; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; }
+  .ibtn:hover { opacity: 1; }
+  #panel .body { padding: 0 14px 14px; }
+  .sec { margin-top: 12px; }
+  .sec > .t { opacity: .6; margin-bottom: 6px; }
+  .seg { display: grid; grid-template-columns: repeat(4, 1fr); background: rgba(255,255,255,.06); border-radius: 7px; padding: 2px; gap: 2px; }
+  .seg button { background: none; border: 0; color: inherit; padding: 5px 0; border-radius: 5px; cursor: pointer; font: inherit; opacity: .75; white-space: nowrap; }
+  .seg button:hover { opacity: 1; }
+  .seg button.on { background: rgba(255,255,255,.17); opacity: 1; }
+  .slider { margin-top: 9px; }
+  .slider .row { display: flex; justify-content: space-between; }
+  .slider .row span:last-child { opacity: .6; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; margin: 4px 0 0; accent-color: #b9a6ff; }
+  .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; }
+  .toggles label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .toggles input { accent-color: #b9a6ff; margin: 0; }
+  .btns { display: flex; gap: 6px; }
+  .btns button {
+    flex: 1; font: inherit; color: inherit; cursor: pointer; padding: 7px 0; border-radius: 7px;
+    background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.1);
+  }
+  .btns button:hover { background: rgba(255,255,255,.18); }
+  #stats { margin-top: 12px; padding: 8px 10px; border-radius: 7px; background: rgba(0,0,0,.28); font-family: Consolas, "Cascadia Mono", monospace; font-size: 11px; line-height: 1.6; color: #dcdcf0; }
+  #stats .live { color: #b9a6ff; }
+  .hint { margin-top: 10px; opacity: .5; font-size: 11px; line-height: 1.6; }
+  #nogl { position: fixed; inset: 0; display: none; place-items: center; color: #fff; font-size: 16px; }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="desktop"></div>
+
+<div id="taskbar">
+  <div class="apps">
+    <div class="app"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="12.5" y="2" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="2" y="12.5" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="12.5" y="12.5" width="9.5" height="9.5" fill="#4cc2ff"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="#fff" stroke-width="2"/><path d="M15 15l5 5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v1H2z" fill="#e09b1d"/><path d="M2 9h20v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z" fill="#ffc83d"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#1b8fd6"/><path d="M6 13c1-5 11-6 12 0-3-2-8-2-9 2 0 2 2 3 4 3-4 1-7-1-7-5z" fill="#6fe37a" opacity=".9"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2.5" fill="#2b2b2b" stroke="#777"/><path d="M6 9l3 3-3 3M11 15h6" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg></div>
+  </div>
+  <div id="clock"></div>
+</div>
+
+<aside id="panel">
+  <header>
+    <div><b>Terrarium</b><span>Night Sky · prototype</span></div>
+    <div><button class="ibtn" id="collapse" title="Collapse">–</button></div>
+  </header>
+  <div class="body">
+    <div class="sec"><div class="t">Desktop layout</div>
+      <div class="seg">
+        <button data-v="mine">Mine</button><button data-v="arranged">Arranged</button><button data-v="messy">Messy</button><button data-v="minimal">Minimal</button>
+      </div>
+    </div>
+    <div class="sec" id="sliders"></div>
+    <div class="sec toggles">
+      <label><input type="checkbox" data-key="showPlanet">Show planet</label>
+      <label><input type="checkbox" data-key="adaptive">Adaptive</label>
+      <label><input type="checkbox" data-key="debug">Nebula edges</label>
+      <label><input type="checkbox" data-key="snap">Snap to grid</label>
+      <label><input type="checkbox" data-key="cap30">Cap 30 fps</label>
+    </div>
+    <div class="sec btns">
+      <button id="btnAdd">+ New file</button>
+      <button id="btnMeteor">Shooting star</button>
+      <button id="btnSeed">New sky</button>
+    </div>
+    <div id="stats"></div>
+    <div class="hint">Drag icons; the nebulae follow when you let go<br>Del removes · H hides this panel</div>
+  </div>
+</aside>
+<div id="nogl">This browser does not support WebGL2.</div>
+
+<script>
+'use strict';
+
+/* ======================================================================
+   Parameters
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
+const STEP = 5;
+const MORPH_MS = 1800;
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');      // wallpaper mode: loaded by the desktop host, messages come from the host
+const PREVIEW = QS.has('preview');     // preview mode: small preview inside the settings window (iframe)
+// Defaults must match the "default" values of this theme in themes.json; warp and quality are not exposed
+const P = {
+  sigma: 72, stars: 0.6, shooting: 0.35, twinkle: 1, showPlanet: 1, adaptive: 1,
+  warp: 34, quality: 2,
+  debug: false, snap: true, cap30: true,
+};
+const DEFAULTS = Object.assign({}, P);
+const DISPLAY_KEYS = ['showPlanet', 'adaptive'];
+const pct = v => Math.round(v * 100) + '%';
+const SLIDERS = [
+  { key: 'sigma',    label: 'Nebula size',    min: 40, max: 200, step: 1,    fmt: v => v + ' px', act: 'field' },
+  { key: 'stars',    label: 'Star density',   min: 0,  max: 1,   step: 0.01, fmt: pct },
+  { key: 'shooting', label: 'Shooting stars', min: 0,  max: 1,   step: 0.01, fmt: pct },
+  { key: 'twinkle',  label: 'Twinkle speed',  min: 0,  max: 3,   step: 0.05, fmt: v => '×' + v.toFixed(2) },
+];
+
+/* ======================================================================
+   Mock desktop icons (standalone demo only)
+   ====================================================================== */
+const PAGE = '<path d="M12 4h17l9 9v29a2 2 0 0 1-2 2H12a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" fill="#fbfbfb" stroke="#c4c4c4"/><path d="M29 4v7a2 2 0 0 0 2 2h7z" fill="#dedede"/>';
+const LINES = '<path d="M24 20h10M24 25h10M24 30h10M24 35h10" stroke="#c9c9c9" stroke-width="1.6"/>';
+const badge = (color, text, size = 11) => `<rect x="4" y="21" width="19" height="19" rx="3" fill="${color}"/><text x="13.5" y="34.5" text-anchor="middle" font-family="Segoe UI,Arial" font-weight="700" font-size="${size}" fill="#fff">${text}</text>`;
+const SVG = {
+  folder: '<path d="M4 12a3 3 0 0 1 3-3h11l4 4h19a3 3 0 0 1 3 3v2H4z" fill="#e09b1d"/><path d="M4 17h40v20a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3z" fill="#ffc83d"/><path d="M4 17h40v2.5H4z" fill="#ffd978"/>',
+  docx: PAGE + LINES + badge('#185abd', 'W'),
+  xlsx: PAGE + '<path d="M24 19h11v17H24zM24 24.5h11M24 30h11M29.5 19v17" stroke="#9ac9a9" stroke-width="1.3" fill="none"/>' + badge('#107c41', 'X'),
+  pdf:  PAGE + LINES + badge('#d33a2c', 'PDF', 7.5),
+  cad:  PAGE + LINES + badge('#2a7fd4', 'DWG', 7),
+  txt:  PAGE + '<path d="M16 18h16M16 23h16M16 28h16M16 33h10" stroke="#9a9a9a" stroke-width="1.6"/>',
+  png:  PAGE + '<rect x="14" y="17" width="20" height="17" rx="1.5" fill="#8fd0f5"/><path d="M14 30l6-6 5 5 3-3 6 6v1.5a1.5 1.5 0 0 1-1.5 1.5h-17A1.5 1.5 0 0 1 14 34z" fill="#3fa35a"/><circle cx="29" cy="21.5" r="2" fill="#fff4b8"/>',
+  shot: '<rect x="3" y="13" width="42" height="25" rx="1" fill="#1d2129" stroke="#f2f2f2" stroke-width="1.5"/><rect x="6" y="16" width="14" height="3" fill="#5b8def"/><rect x="6" y="21" width="22" height="2" fill="#6c7280"/><rect x="6" y="25" width="18" height="2" fill="#6c7280"/><rect x="31" y="16" width="11" height="18" fill="#2e3440"/>',
+  zip:  PAGE + '<path d="M22 4v4h3v3h-3v3h3v3h-3v3h3v3h-3" stroke="#8a6d3b" stroke-width="2" fill="none"/><rect x="20" y="26" width="7" height="8" rx="1" fill="#8a6d3b"/>',
+  bin:  '<path d="M12 14h24l-2.5 27a3 3 0 0 1-3 2.7H17.5a3 3 0 0 1-3-2.7z" fill="rgba(215,235,250,.55)" stroke="rgba(255,255,255,.9)" stroke-width="1.2"/><path d="M10 12.5h28" stroke="rgba(255,255,255,.95)" stroke-width="2.4" stroke-linecap="round"/><path d="M19 19l1 19M24 19v19M29 19l-1 19" stroke="rgba(255,255,255,.7)" stroke-width="1.2"/>',
+  pc:   '<rect x="5" y="8" width="38" height="26" rx="2" fill="#1f8fe0" stroke="#bfe3ff" stroke-width="1.5"/><path d="M5 30h38" stroke="#0d5fa8" stroke-width="3"/><path d="M19 34l-2 6h14l-2-6z" fill="#9aa7b4"/>',
+};
+const APP_COLORS = ['#e8553e','#2f7de1','#18a058','#8b5cf6','#f59e0b','#0ea5a4','#db2777','#334155','#16a34a','#2563eb'];
+function appSVG(name) {
+  let h = 0; for (const ch of name) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return `<rect x="5" y="5" width="38" height="38" rx="9" fill="${APP_COLORS[h % APP_COLORS.length]}"/><path d="M5 14a9 9 0 0 1 9-9h20a9 9 0 0 1 9 9v6H5z" fill="#fff" opacity=".14"/>` +
+    `<text x="24" y="31.5" text-anchor="middle" font-family="Segoe UI,Microsoft YaHei,Arial" font-weight="700" font-size="18" fill="#fff">${[...name][0]}</text>`;
+}
+const glyphOf = (name, type) => type === 'app' ? appSVG(name) : SVG[type];
+
+const FILES = [
+  ['回收站','bin'], ['项目资料','folder'], ['2026 报价单.xlsx','xlsx'], ['产品需求.docx','docx'],
+  ['截图_0927.png','png'], ['合同扫描件.pdf','pdf'], ['新建文件夹','folder'], ['设计素材','folder'],
+  ['旅行照片','folder'], ['安装包.zip','zip'], ['会议纪要.docx','docx'], ['壁纸灵感','folder'],
+  ['周报.xlsx','xlsx'], ['草图.png','png'], ['旧备份','folder'], ['微信图片.png','png'], ['说明书.pdf','pdf'], ['简历.docx','docx'], ['支出表.xlsx','xlsx'], ['压缩备份.zip','zip'], ['素材图.png','png'], ['下载','folder'], ['表情包.png','png'], ['工资条.xlsx','xlsx'], ['租房合同.pdf','pdf'], ['日记.docx','docx'], ['桌面截图.png','png'],
+];
+const EXTRA = [
+  ['新建文本文档.txt','txt'], ['新建文件夹 (2)','folder'], ['发票.pdf','pdf'], ['数据导出.xlsx','xlsx'],
+  ['截图_0928.png','png'], ['备忘.txt','txt'], ['归档.zip','zip'], ['新建文件夹 (3)','folder'],
+];
+const APPS = ['回收站','此电脑','微信','飞书','钉钉','腾讯会议','网易云音乐','剪映','Photoshop','Obsidian','VS Code','Krita',
+  'AutoCAD','Rhino','KeyShot','百度网盘','Chrome','Blender','Figma','Notion','QQ','Steam','Eagle','OBS','Kimi','PureRef','EV录屏','NX 12.0','MarkText','Codex'];
+const MISC = [['projects','folder'],['游戏','folder'],['todolist','folder'],['OKR管理.xlsx','xlsx'],['固定成本.xlsx','xlsx'],
+  ['pdfarrange','app'],['stp.log','txt'],['零件.stp','txt'],['零件.3dm','png'],['预览','folder']];
+const RIGHT = [['plot.log','txt'],['工具','folder'],['归档.rar','zip'],['1685x128.png','png'],['微信图片.jpg','png'],['0914.png','png'],
+  ['微信图片 2.jpg','png'],['images.png','png'],['目录.docx','docx'],['api.txt','txt'],['c4ef.png','png'],['0918.png','png'],
+  ['板调整.pdf','pdf'],['recommend.txt','txt'],['button.stp','txt'],['新建文本 (2).txt','txt'],['ugstep21','txt'],['新建文本 (3).txt','txt'],
+  ['工作计划.txt','txt'],['微信图片 3.jpg','png'],['新建 DOCX.docx','docx'],['SEO.txt','txt'],['resend.txt','txt'],['产品介绍.txt','txt'],
+  ['USER.pdf','pdf'],['新建文本.txt','txt'],['餐椅.pur','png'],['PAP-20.pdf','pdf'],['演示文稿.pptx','pdf'],['问题点.txt','txt']];
+function mineCells() {
+  const out = []; let a = 0, m = 0, rgt = 0, sh = 0;
+  for (let c = 0; c < 3; c++) for (let r = 0; r < 10; r++) {
+    const name = APPS[a++];
+    out.push([c, r, name, name === '回收站' ? 'bin' : name === '此电脑' ? 'pc' : 'app']);
+  }
+  for (let r = 0; r < 10; r++) out.push([3, r, ...MISC[m++]]);
+  for (let r = 0; r < 5; r++) out.push([5, r, `零件结构 ${r + 1}.dwg`, 'cad']);
+  out.push([6, 0, '腿测试.bak', 'txt']);
+  for (const [c, r] of [[6,4],[6,5],[6,6],[6,7],[6,8],[7,3],[7,4],[7,5],[7,6],[7,7],[8,4],[8,5],[8,6],[9,2],[9,3],[9,4],[9,5],[9,6]])
+    out.push([c, r, `ScreenShot ${++sh}.png`, 'shot']);
+  for (const [c, r] of [[11,1],[11,2],[11,3],[12,1],[12,2],[12,3],[12,4],[13,1],[13,2],[13,3],[13,4],[14,1],[14,3],[14,4],[15,1],[15,6],
+    [16,4],[16,6],[17,4],[17,5],[17,6],[17,7],[19,4],[19,5],[19,8],[20,0],[20,4],[20,6],[21,0],[21,5],[21,6]]) {
+    const f = RIGHT[rgt++ % RIGHT.length]; out.push([c, r, f[0], f[1]]);
+  }
+  return out;
+}
+
+/* ======================================================================
+   CPU noise + tileable noise texture
+   ====================================================================== */
+let seed = (Math.random() * 1e6) | 0;
+function hash2(x, y, k = 0) {
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(seed + k, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x, y, k = 0) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy, k), b = hash2(ix + 1, iy, k), c = hash2(ix, iy + 1, k), d = hash2(ix + 1, iy + 1, k);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+function fbm(x, y, k = 0) {
+  let a = 0.5, s = 0;
+  for (let i = 0; i < 4; i++) { s += a * vnoise(x, y, k + i * 7); x = x * 2.03 + 17.1; y = y * 2.03 + 17.1; a *= 0.5; }
+  return s;
+}
+function tileNoise(x, y, px, py, k) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const m = (v, p) => ((v % p) + p) % p;
+  const x0 = m(ix, px), x1 = m(ix + 1, px), y0 = m(iy, py), y1 = m(iy + 1, py);
+  const a = hash2(x0, y0, k), b = hash2(x1, y0, k), c = hash2(x0, y1, k), d = hash2(x1, y1, k);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+function tileFbm(u, v, periods, k) {
+  let s = 0, w = 0.5, tw = 0;
+  for (let i = 0; i < periods.length; i++) { s += w * tileNoise(u * periods[i], v * periods[i], periods[i], periods[i], k + i * 13); tw += w; w *= 0.5; }
+  return s / tw;
+}
+function makeNoiseImage() {
+  const S = 256, d = new Uint8Array(S * S * 4);
+  const chans = [[8, 16, 32, 64], [8, 16, 32, 64], [8, 16, 32], [16, 32, 64, 128]];
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = x / S, v = y / S, i = (y * S + x) * 4;
+    for (let c = 0; c < 4; c++) {
+      const n = tileFbm(u, v, chans[c], 100 + c * 50);
+      d[i + c] = Math.min(Math.max((n - 0.5) * 1.9 + 0.5, 0), 1) * 255;
+    }
+  }
+  return { S, d };
+}
+
+/* ======================================================================
+   Nebula field (CPU): s = signed distance to the nebula edge (< 0 inside), same model as meadow
+   ====================================================================== */
+let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1, NZ = null;
+function buildNoise() {
+  const N = Gw * Gh;
+  NZ = { wx: new Float32Array(N), wy: new Float32Array(N) };
+  for (let gy = 0; gy < Gh; gy++) for (let gx = 0; gx < Gw; gx++) {
+    const i = gy * Gw + gx, x = gx * STEP, y = gy * STEP;
+    NZ.wx[i] = fbm(x * 0.0028, y * 0.0028, 1) - 0.47;
+    NZ.wy[i] = fbm(x * 0.0028, y * 0.0028, 2) - 0.47;
+  }
+}
+let fieldMs = 0;
+function computeField(rects) {
+  const t0 = performance.now();
+  const N = Gw * Gh, f1 = new Float32Array(N);
+  const sig = P.sigma, is1 = 1 / (sig * sig);
+  const wa = P.warp * 2.2, wmax = wa * 0.5;
+  for (const r of rects) {
+    const R = 5.5 * sig + Math.max(r.hw, r.hh) * 0.5 + wmax;
+    const gx0 = Math.max(0, Math.floor((r.cx - R) / STEP)), gx1 = Math.min(Gw - 1, Math.ceil((r.cx + R) / STEP));
+    const gy0 = Math.max(0, Math.floor((r.cy - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((r.cy + R) / STEP));
+    const chw = r.hw * 0.5, chh = r.hh * 0.5;
+    for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+      const i = gy * Gw + gx;
+      const qx = gx * STEP + NZ.wx[i] * wa, qy = gy * STEP + NZ.wy[i] * wa;
+      let dx = Math.abs(qx - r.cx) - chw, dy = Math.abs(qy - r.cy) - chh;
+      if (dx < 0) dx = 0; if (dy < 0) dy = 0;
+      f1[i] += Math.exp(-(dx * dx + dy * dy) * is1);
+    }
+  }
+  // Floor = contribution at the edge of the evaluated range, so far-away sky has no box-shaped seams
+  const c0 = Math.sqrt(-Math.log(0.35)), s = new Float32Array(N), fMin = Math.exp(-30);
+  for (let i = 0; i < N; i++) {
+    const g = Math.log(Math.max(f1[i], fMin));
+    s[i] = sig * (Math.sqrt(Math.max(-g, 0)) - c0) - sig * 0.6 * Math.max(g, 0);
+  }
+  fieldMs = performance.now() - t0;
+  return { s };
+}
+function sampleArr(a, x, y) {
+  const fx = Math.min(Math.max(x / STEP, 0), Gw - 1.001), fy = Math.min(Math.max(y / STEP, 0), Gh - 1.001);
+  const ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy, i = iy * Gw + ix;
+  return (a[i] * (1 - tx) + a[i + 1] * tx) * (1 - ty) + (a[i + Gw] * (1 - tx) + a[i + Gw + 1] * tx) * ty;
+}
+
+/* ======================================================================
+   Shaders
+   ====================================================================== */
+const VS = `#version 300 es
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const FS = `#version 300 es
+precision highp float;
+uniform sampler2D uNoise, uFA, uFB;
+uniform vec2 uRes, uGrid;
+uniform float uScale, uSeed, uStep, uMix, uDebug;
+uniform float uStars, uTw, uBreath;
+uniform vec2 uD0, uD1, uD2;            // star layer drift (px, wrapped per layer)
+uniform vec2 uW1, uW2, uW3, uWh, uWw;  // nebula noise drift (px, wrapped per noise scale)
+out vec4 o;
+
+// ---- palette (sRGB values) ----
+const vec3 SKY_TOP = vec3(0.024, 0.031, 0.094), SKY_MID = vec3(0.047, 0.050, 0.150), SKY_BOT = vec3(0.098, 0.071, 0.205);
+const vec3 MW_COL  = vec3(0.085, 0.080, 0.165);
+const vec3 TEAL_O = vec3(0.070, 0.195, 0.280), TEAL_M = vec3(0.095, 0.285, 0.370), TEAL_C = vec3(0.130, 0.360, 0.445);
+const vec3 VIO_O  = vec3(0.175, 0.130, 0.355), VIO_M  = vec3(0.255, 0.175, 0.465), VIO_C  = vec3(0.320, 0.225, 0.545);
+const vec3 ROSE_O = vec3(0.275, 0.120, 0.285), ROSE_M = vec3(0.405, 0.165, 0.370), ROSE_C = vec3(0.495, 0.220, 0.435);
+
+float ss(float a, float b, float x) { float t = clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
+vec4 N(vec2 p, float scale) { return texture(uNoise, p / scale + uSeed * 0.013); }
+float fieldS(sampler2D t, vec2 p) { return texture(t, (p / uStep + 0.5) / uGrid).r; }
+vec3 hash32(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+  p3 += dot(p3, p3.yxz + 33.33);
+  return fract((p3.xxy + p3.yzz) * p3.zyx);
+}
+float hash12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+
+// One starfield layer: at most one star per cell, placed inside the inner 56% of the cell so its glow never
+// crosses into a neighbour (only the pixel's own cell is evaluated).
+vec3 starLayer(vec2 p, vec2 drift, float cell, float dens, float rMin, float rMax, float glow, float twAmp, float k, float spark) {
+  vec2 c = floor((p + drift) / cell);
+  vec2 cm = mod(c, 4096.0) + vec2(k * 131.0 + uSeed, k * 71.0);
+  vec3 h = hash32(cm);
+  if (h.x > dens) return vec3(0.0);
+  vec3 g = hash32(cm + 57.3);
+  vec2 sp = (c + 0.22 + 0.56 * h.yz) * cell - drift;
+  vec2 dv = p - sp;
+  float d2 = dot(dv, dv), d = sqrt(d2);
+  float margin = 0.22 * cell;
+  float r = mix(rMin, rMax, g.x * g.x * g.x);
+  float re = max(r, 0.6 / uScale);                              // never thinner than ~1 device pixel
+  float I = exp(-d2 / (re * re)) * min(1.0, r / re + 0.25);
+  I += glow * exp(-d / (r * 3.2)) * ss(margin, margin * 0.4, d);
+  if (spark > 0.0 && g.x > 0.88) {                              // four-point sparkle on the brightest near stars
+    float L = r * 4.5 * spark, w = 0.32 + 0.5 / uScale;
+    float sp4 = exp(-dv.y * dv.y / (w * w)) * exp(-abs(dv.x) / L) + exp(-dv.x * dv.x / (w * w)) * exp(-abs(dv.y) / L);
+    I += 0.55 * sp4 * ss(margin, margin * 0.5, d);
+  }
+  float tw = 1.0 - twAmp * (0.35 + 0.65 * g.y) * (0.5 + 0.5 * sin(uTw * (0.7 + 1.9 * g.z) + g.z * 43.0 + g.y * 17.0));
+  vec3 sc = g.y < 0.55 ? vec3(0.80, 0.87, 1.0) : g.y < 0.78 ? vec3(1.0) : g.y < 0.92 ? vec3(1.0, 0.88, 0.72) : vec3(1.0, 0.78, 0.90);
+  return sc * I * tw;
+}
+
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, uRes.y * uScale - gl_FragCoord.y) / uScale;
+  vec2 uv = p / uRes;
+
+  // ---------- sky: deep navy at the top, indigo-violet towards the bottom, very broad soft wash ----------
+  vec3 col = mix(SKY_TOP, SKY_MID, ss(0.0, 0.55, uv.y));
+  col = mix(col, SKY_BOT, ss(0.45, 1.1, uv.y));
+  vec4 nw = N(p, 7000.0);
+  col *= 0.90 + 0.18 * nw.r;
+  col += vec3(0.018, 0.0, 0.03) * ss(0.45, 0.85, nw.g);
+
+  // ---------- Milky Way: a faint diagonal band with darker dust lanes ----------
+  vec2 a = p / uRes.y;
+  vec2 dir = normalize(vec2(1.0, -0.40));
+  float mwd = dot(a - vec2(0.5 * uRes.x / uRes.y, 0.50), vec2(-dir.y, dir.x)) + (N(p, 3200.0).g - 0.5) * 0.18;
+  float mw = exp(-mwd * mwd / 0.020);
+  float lanes = ss(0.5, 0.8, N(p + 517.0, 1100.0).b);
+  col += MW_COL * mw * (0.45 + 0.8 * N(p + 211.0, 1800.0).r) * (1.0 - 0.7 * lanes);
+
+  // ---------- nebula islands around the icons ----------
+  float sF = mix(fieldS(uFA, p), fieldS(uFB, p), uMix);
+  float m1 = 0.0, m3 = 0.0, d = 1e3;
+  float aa = 0.8 / uScale + 0.7;
+  if (sF < 130.0) {
+    float w1 = N(p + uW1, 1600.0).r - 0.5, w2 = N(p + uW2, 560.0).g - 0.5;
+    d = sF + w1 * 52.0 + w2 * 14.0 + 4.5 * sin(uBreath + w1 * 5.0);     // drifting, slowly breathing edge
+    float hv = N(p + uWh, 6000.0).b;                                     // big slow patches of hue: teal -> violet -> rose
+    float ta = ss(0.26, 0.50, hv), tb = ss(0.56, 0.80, hv);
+    vec3 cO = mix(mix(TEAL_O, VIO_O, ta), ROSE_O, tb);
+    vec3 cM = mix(mix(TEAL_M, VIO_M, ta), ROSE_M, tb);
+    vec3 cC = mix(mix(TEAL_C, VIO_C, ta), ROSE_C, tb);
+    vec2 pr = vec2(0.94 * p.x + 0.34 * p.y, -0.34 * p.x + 0.94 * p.y);  // gas streaks run slightly diagonal
+    float wisp = N(pr * vec2(0.5, 1.25) + uWw, 800.0).a;               // streaky gas texture inside the wash
+    // soft glow spilling into the open sky, plus a thin edge light where the gas meets the dark
+    col += cM * 0.36 * exp(-max(d, 0.0) / 38.0) * ss(-8.0, 4.0, d);
+    // outer layer: a soft-edged wash
+    m1 = ss(8.0, -8.0, d);
+    col = mix(col, cO * (0.86 + 0.28 * wisp), m1 * 0.94);
+    col += mix(cM, vec3(0.75, 0.62, 0.95), 0.25) * 0.22 * exp(-abs(d + 4.0) / 5.0);
+    // middle layer: crisp flat shape with a lighter inner rim
+    float bn = N(p + uW3, 900.0).b;
+    float d2 = d + 18.0 + 24.0 * bn;
+    float m2 = ss(aa, -aa, d2);
+    col = mix(col, cM * (0.90 + 0.18 * wisp), m2 * 0.96);
+    col += cM * 0.20 * ss(-9.0, -1.0, d2) * m2;
+    // core: where the icons sit; richer but still mid-tone so white labels stay readable
+    float d3 = d + 52.0 + 30.0 * (1.0 - bn);
+    m3 = ss(aa, -aa, d3);
+    col = mix(col, cC * (0.92 + 0.14 * wisp), m3);
+    col += cC * 0.13 * ss(-7.0, -1.0, d3) * m3;
+    // billows: big flat puffs of lighter gas drifting through the middle and core layers
+    float bl = N(p + uW3 * 0.7 + 333.0, 1700.0).r * 0.8 + w2 * 0.25;
+    float puff = ss(0.58, 0.66, bl) * m2;
+    col = mix(col, cC * 1.05 + vec3(0.045, 0.04, 0.055), puff * 0.45);
+    // broad soft dust lanes: darker drifts that give the gas some depth
+    float dust = ss(0.60, 0.78, N(p + uW1 * 0.6 + 919.0, 2000.0).g);
+    col *= 1.0 - dust * m1 * vec3(0.26, 0.24, 0.12);           // shift towards indigo rather than mud
+  }
+
+  // ---------- stars: three parallax depths; far stars sink behind the gas, near stars sit in front ----------
+  if (uStars > 0.001) {
+    float mwBoost = 1.0 + 1.1 * mw * (1.0 - 0.6 * lanes);
+    vec3 st = vec3(0.0);
+    st += starLayer(p, uD0, 11.0, 0.32 * uStars * mwBoost, 0.30, 0.75, 0.0, 0.30, 1.0, 0.0) * 0.55 * (1.0 - 0.75 * m1);
+    st += starLayer(p, uD1, 27.0, 0.42 * uStars, 0.45, 1.05, 0.10, 0.45, 2.0, 0.0) * 0.80 * (1.0 - 0.45 * m1) * (1.0 - 0.35 * m3);
+    st += starLayer(p, uD2, 74.0, 0.50 * uStars, 0.75, 1.60, 0.16, 0.55, 3.0, 1.0) * (1.0 - 0.45 * m3);
+    col += st;
+  }
+
+  if (uDebug > 0.5) col = mix(col, vec3(1.0, 0.3, 0.3), 1.0 - ss(0.0, 1.5, abs(d)));
+  col += (hash12(gl_FragCoord.xy) - 0.5) / 255.0 * 1.6;   // dither: dark gradients would band otherwise
+  o = vec4(col, 1.0);
+}`;
+
+// Small blended quads: shooting stars and the ringed planet (only their own rectangle is shaded)
+const VS_SPRITE = `#version 300 es
+uniform vec4 uRect;   // x, y, w, h in CSS px
+uniform vec2 uRes;
+void main() {
+  vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+  vec2 px = uRect.xy + c * uRect.zw;
+  gl_Position = vec4(px.x / uRes.x * 2.0 - 1.0, 1.0 - px.y / uRes.y * 2.0, 0.0, 1.0);
+}`;
+const FS_SPRITE = `#version 300 es
+precision highp float;
+uniform vec2 uRes;
+uniform float uScale, uAlpha;
+uniform int uKind;
+uniform vec4 uA, uB;
+out vec4 o;
+float ss(float a, float b, float x) { float t = clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
+vec4 over(vec4 dst, vec3 c, float a) { return vec4(c * a, a) + dst * (1.0 - a); }   // premultiplied "over"
+
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, uRes.y * uScale - gl_FragCoord.y) / uScale;
+  float aa = 0.75 / uScale;
+  if (uKind == 0) {
+    // shooting star: uA = head.xy, tail.xy
+    vec2 h = uA.xy, ba = uA.zw - uA.xy;
+    float L2 = max(dot(ba, ba), 1e-3);
+    float t = clamp(dot(p - h, ba) / L2, 0.0, 1.0);
+    float d = length(p - h - ba * t);
+    float w = mix(1.25, 0.3, t) + 0.45 / uScale;
+    float fade = pow(1.0 - t, 1.7);
+    float core = exp(-d * d / (w * w)) * fade;
+    float glow = exp(-d / (3.0 + 5.0 * (1.0 - t))) * 0.28 * pow(1.0 - t, 2.4) * ss(22.0, 10.0, d);   // fades out before the quad edge
+    float hd = length(p - h), head = exp(-hd / 2.6) * 0.85 * ss(22.0, 10.0, hd);
+    vec3 c = mix(vec3(1.0, 0.98, 0.94), vec3(0.62, 0.78, 1.0), ss(0.0, 0.7, t));
+    float a = clamp((core + glow + head) * uAlpha, 0.0, 1.0);
+    o = vec4(c * a, a);
+    return;
+  }
+  // ringed planet: uA = centre.xy, radius, ring tilt; uB = moon offset.xy, moon depth, band phase
+  vec2 c = uA.xy; float R = uA.z, tl = uA.w;
+  vec2 q = p - c;
+  float cs = cos(tl), sn = sin(tl);
+  vec2 v = vec2(cs * q.x + sn * q.y, -sn * q.x + cs * q.y);       // ring frame
+  float r = length(q);
+  vec3 Ld = normalize(vec3(-0.60, -0.62, 0.50));                   // light from the upper left
+  vec4 acc = vec4(0.0);
+  // faint halo
+  float halo = exp(-max(r - R, 0.0) / (R * 0.75)) * 0.16 * ss(R * 3.4, R * 1.2, r);
+  acc = over(acc, vec3(0.70, 0.58, 0.88), halo);
+  // moon behind the planet
+  vec2 mq = p - (c + uB.xy); float mR = R * 0.27, md = length(mq);
+  float moonA = ss(mR + aa, mR - aa, md);
+  vec3 moonC = mix(vec3(0.46, 0.43, 0.66), vec3(0.88, 0.86, 0.96), ss(-0.12, 0.12, dot(mq / mR, Ld.xy * 1.2) + 0.15));
+  if (uB.z < 0.0) acc = over(acc, moonC, moonA);
+  // ring (ellipse in the ring frame)
+  float e = length(vec2(v.x, v.y / 0.30)) / R;
+  float ew = fwidth(e) * 0.9 + 1e-4;
+  float ring = ss(1.34 - ew, 1.34 + ew, e) * ss(2.12 + ew, 2.12 - ew, e);
+  float gap = ss(1.64 - ew, 1.64 + ew, e) * ss(1.74 + ew, 1.74 - ew, e);
+  vec3 ringC = mix(vec3(0.60, 0.56, 0.84), vec3(0.86, 0.81, 0.96), ss(1.70, 1.80, e));
+  ringC *= 0.88 + 0.12 * ss(-1.0, 1.0, -v.x / R);                 // lit side of the ring a touch brighter
+  float ringA = ring * (0.92 - 0.75 * gap);
+  float back = ss(0.6, -0.6, v.y);
+  acc = over(acc, ringC * 0.82, ringA * back);
+  // planet body: soft pastel bands that follow the ring plane, flat two-tone shading
+  float bodyA = ss(R + aa, R - aa, r);
+  if (bodyA > 0.0) {
+    vec3 n = vec3(q / R, sqrt(max(1.0 - dot(q, q) / (R * R), 0.0)));
+    float by = v.y / R + 0.05 * sin(v.x / R * 2.6 + uB.w);
+    float bw = fwidth(by) + 1e-4;
+    vec3 bc = vec3(0.97, 0.86, 0.72);
+    bc = mix(bc, vec3(0.93, 0.67, 0.54), ss(-0.58 - bw, -0.58 + bw, by));
+    bc = mix(bc, vec3(0.98, 0.82, 0.68), ss(-0.30 - bw, -0.30 + bw, by));
+    bc = mix(bc, vec3(0.86, 0.55, 0.58), ss(0.05 - bw, 0.05 + bw, by));
+    bc = mix(bc, vec3(0.95, 0.74, 0.62), ss(0.30 - bw, 0.30 + bw, by));
+    bc = mix(bc, vec3(0.72, 0.45, 0.56), ss(0.62 - bw, 0.62 + bw, by));
+    float lit = dot(n, Ld);
+    float sh = ss(0.10 + 0.03, 0.10 - 0.03, lit);                  // crisp terminator
+    bc = mix(bc, bc * vec3(0.40, 0.34, 0.62), sh * 0.88);
+    bc += vec3(0.10, 0.08, 0.06) * ss(R - 2.2, R - 0.6, r) * ss(0.35, 0.7, lit);   // thin rim light on the lit edge
+    // the front ring casts a narrow shadow on the body just above it
+    float rs = ss(1.30, 1.40, length(vec2(v.x, (v.y + R * 0.20) / 0.30)) / R) * ss(2.15, 2.05, length(vec2(v.x, (v.y + R * 0.20) / 0.30)) / R);
+    bc *= 1.0 - 0.28 * rs * ss(-0.2, 0.2, v.y);
+    acc = over(acc, bc, bodyA);
+  }
+  acc = over(acc, ringC, ringA * (1.0 - back));
+  if (uB.z >= 0.0) acc = over(acc, moonC, moonA);
+  o = acc * uAlpha;
+}`;
+
+/* ======================================================================
+   WebGL
+   ====================================================================== */
+const cv = document.getElementById('art');
+const gl = cv.getContext('webgl2', { antialias: false });
+if (!gl) document.getElementById('nogl').style.display = 'grid';
+function program(vs, fs) {
+  const mk = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); throw new Error('shader'); }
+    return s;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, mk(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) console.error(gl.getProgramInfoLog(p));
+  const U = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i).name.replace(/\[0\]$/, ''); U[nm] = gl.getUniformLocation(p, nm); }
+  return { p, U };
+}
+const PR = program(VS, FS);
+const SPR = program(VS_SPRITE, FS_SPRITE);
+gl.bindVertexArray(gl.createVertexArray());
+
+let noiseTex = null;
+function buildNoiseTex() {
+  const { S, d } = makeNoiseImage();
+  noiseTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, noiseTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, S, S, 0, gl.RGBA, gl.UNSIGNED_BYTE, d);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+}
+const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+function toHalf(v) {
+  f32[0] = v; const x = u32[0];
+  const sign = (x >>> 16) & 0x8000, e = ((x >>> 23) & 0xff) - 112, m = x & 0x7fffff;
+  if (e <= 0) return sign;
+  if (e >= 31) return sign | 0x7c00;
+  return sign | (e << 10) | (m >>> 13);
+}
+// Two field textures: interpolate from -> to while icons move
+const ftex = [null, null];
+let fromI = 0, toI = 0, morphT0 = -1e9, morphDur = MORPH_MS, FA = null, FB = null;
+function allocField() {
+  for (let i = 0; i < 2; i++) {
+    if (ftex[i]) gl.deleteTexture(ftex[i]);
+    ftex[i] = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, ftex[i]);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, Gw, Gh, 0, gl.RED, gl.HALF_FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+}
+function uploadField(i, Fd) {
+  const d = new Uint16Array(Gw * Gh);
+  for (let k = 0; k < d.length; k++) d[k] = toHalf(Fd.s[k]);
+  gl.bindTexture(gl.TEXTURE_2D, ftex[i]);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Gw, Gh, gl.RED, gl.HALF_FLOAT, d);
+}
+
+const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2 - 4, hh: ic.h / 2 - 2 }));
+// Adaptive off: the scene ignores the icons; a few decorative nebulae float at seed-chosen spots instead
+function freeRects() {
+  const spots = [[0.16, 0.30], [0.60, 0.66], [0.40, 0.16], [0.86, 0.42]];
+  return spots.map(([fx, fy], i) => ({
+    cx: (fx + (hash2(i, 1, 77) - 0.5) * 0.12) * W, cy: (fy + (hash2(i, 2, 77) - 0.5) * 0.12) * (H - TASKBAR),
+    hw: 40 + hash2(i, 3, 77) * 70, hh: 30 + hash2(i, 4, 77) * 40,
+  }));
+}
+const fieldRects = () => P.adaptive ? iconRects() : freeRects();
+function commit(fromEmpty = false) {
+  const nf = computeField(fieldRects());
+  const target = 1 - toI;
+  if (fromEmpty) { FA = computeField([]); uploadField(toI, FA); }
+  else FA = FB;
+  FB = nf;
+  uploadField(target, FB);
+  fromI = toI; toI = target;
+  morphT0 = performance.now();
+  morphDur = fromEmpty ? 2600 : MORPH_MS;
+  planetGoal = planetTarget(FB);
+}
+function refresh() {
+  FA = FB = computeField(fieldRects());
+  uploadField(toI, FB);
+  fromI = toI; morphT0 = -1e9;
+  planetGoal = planetTarget(FB);
+}
+
+let curMix = 1;
+const curS = (x, y) => FB ? sampleArr(FA.s, x, y) * (1 - curMix) + sampleArr(FB.s, x, y) * curMix : 999;
+
+/* ======================================================================
+   Animated state (advanced in frame(), read by draw())
+   ====================================================================== */
+const mod = (x, m) => ((x % m) + m) % m;
+const STAR_CELLS = [11, 27, 74], STAR_SPEED = [0.7, 1.5, 3.0];     // px/s, slow parallax pan
+const STAR_DIR = [-0.93, -0.36];
+const starDrift = [[0, 0], [0, 0], [0, 0]];
+// nebula noise drifts: [tile scale, velocity px/s]
+const NOFF = { W1: [1600, [5.0, -2.4]], W2: [560, [-3.4, 2.6]], W3: [900, [2.4, 1.6]], Wh: [6000, [3.0, -1.0]], Ww: [800, [4.2, 0.5]] };
+const nOff = { W1: [0, 0], W2: [0, 0], W3: [0, 0], Wh: [0, 0], Ww: [0, 0] };
+let twT = 0, breath = 0, flowT = 0;
+
+// ---- shooting stars ----
+const meteors = [];
+let meteorWait = 6;
+function iconHit(x, y, pad) {
+  for (const ic of icons) if (x > ic.x - pad && x < ic.x + ic.w + pad && y > ic.y - pad && y < ic.y + ic.h + pad) return true;
+  return false;
+}
+function pathClear(x0, y0, dx, dy, len) {
+  for (let s = 0; s <= len; s += 10) {
+    const x = x0 + dx * s, y = y0 + dy * s;
+    if (x < 8 || x > W - 8 || y < 8 || y > H - TASKBAR - 8) return false;
+    if (curS(x, y) < 42 || (FB && sampleArr(FB.s, x, y) < 42)) return false;
+    if (iconHit(x, y, 30)) return false;
+    if (planet.a > 0.05 && Math.hypot(x - planet.px, y - planet.py) < planet.R * 3.2 + 26) return false;
+  }
+  return true;
+}
+function spawnMeteor() {
+  for (let k = 0; k < 120; k++) {
+    const ang = 0.28 + Math.random() * 0.40, side = Math.random() < 0.5 ? -1 : 1;
+    const dx = Math.cos(ang) * side, dy = Math.sin(ang);
+    // long streaks first; on crowded desktops fall back to shorter ones that fit the gaps
+    const len = k < 60 ? 170 + Math.random() * 190 : 100 + Math.random() * 90;
+    const x0 = 30 + Math.random() * (W - 60), y0 = 20 + Math.random() * (H - TASKBAR) * 0.8;
+    if (!pathClear(x0, y0, dx, dy, len)) continue;
+    meteors.push({ x0, y0, dx, dy, len, t: 0, dur: 0.75 + len / 420 + Math.random() * 0.3, tail: Math.min(150, len * 0.5) });
+    return true;
+  }
+  return false;
+}
+function stepMeteors(dt) {
+  for (let i = meteors.length - 1; i >= 0; i--) { const m = meteors[i]; m.t += dt; if (m.t > m.dur) meteors.splice(i, 1); }
+  if (P.shooting <= 0.001 || (!iconsSeen)) return;
+  meteorWait -= dt;
+  if (meteorWait <= 0) {
+    if (meteors.length < 2) spawnMeteor();
+    const mean = 4 + 40 * Math.pow(1 - P.shooting, 2);           // ~21 s at the default 35%, ~4 s at 100%
+    meteorWait = mean * (0.4 + Math.random() * 1.2);
+  }
+}
+
+// ---- ringed planet: picks the roomiest open patch of sky, glides along a slow ellipse there ----
+let planetGoal = null;
+const planet = { x: 0, y: 0, R: 16, orbit: 0, a: 0, th: Math.random() * 6.28, ph: Math.random() * 6.28, spin: 0, px: -999, py: -999, placed: false };
+function planetTarget(F) {
+  if (!F) return null;
+  const top = 18, bot = H - TASKBAR - 18, left = 18, right = W - 18;
+  let best = null, bs = -1e9;
+  const checkIcons = !P.adaptive && icons.length;
+  for (let y = top; y <= bot; y += 16) for (let x = left; x <= right; x += 16) {
+    let clear = Math.min(sampleArr(F.s, x, y) - 34, x - left, right - x, y - top, bot - y);
+    if (checkIcons) for (const ic of icons) {
+      const ddx = Math.max(ic.x - x, 0, x - ic.x - ic.w), ddy = Math.max(ic.y - y, 0, y - ic.y - ic.h);
+      clear = Math.min(clear, Math.hypot(ddx, ddy) - 20);
+    }
+    const score = Math.min(clear, 150) - 0.05 * Math.abs(x - 0.70 * W) - 0.07 * Math.abs(y - 0.30 * H);
+    if (score > bs) { bs = score; best = { x, y, clear }; }
+  }
+  if (!best) return null;
+  const R = Math.min(19, (best.clear - 6) / 3.0);
+  return { x: best.x, y: best.y, R, orbit: Math.max(0, Math.min(70, best.clear - 3.0 * R - 10)) };
+}
+function stepPlanet(dt) {
+  const g = planetGoal, want = P.showPlanet === 1 && iconsSeen && g && g.R >= 9;
+  planet.th += dt * 6.2832 / 320;                                 // one lap of the little ellipse every ~5 minutes
+  planet.ph += dt * 6.2832 / 48;                                  // the moon goes round every 48 s
+  planet.spin += dt * 0.05;
+  if (!want) planet.a = Math.max(0, planet.a - dt * 0.8);
+  else if (!planet.placed || planet.a <= 0.001) {                 // appear in place
+    Object.assign(planet, { x: g.x, y: g.y, R: g.R, orbit: g.orbit, placed: true });
+    planet.a = Math.min(1, planet.a + dt * 0.5);
+  } else if (Math.hypot(g.x - planet.x, g.y - planet.y) > 140) {  // far move: fade out here, fade in there
+    planet.a = Math.max(0, planet.a - dt * 0.9);
+  } else {
+    const k = Math.min(1, dt * 0.6);
+    planet.x += (g.x - planet.x) * k; planet.y += (g.y - planet.y) * k;
+    planet.R += (g.R - planet.R) * k; planet.orbit += (g.orbit - planet.orbit) * k;
+    planet.a = Math.min(1, planet.a + dt * 0.5);
+  }
+  planet.px = planet.x + Math.cos(planet.th) * planet.orbit;
+  planet.py = planet.y + Math.sin(planet.th) * planet.orbit * 0.55;
+}
+
+function stepScene(dt) {
+  flowT += dt;
+  twT = mod(twT + dt * P.twinkle * 2.2, 6.2832 * 1000);
+  breath = mod(breath + dt * 0.21, 6.2832);
+  for (let i = 0; i < 3; i++) {
+    const m = STAR_CELLS[i] * 4096;
+    starDrift[i][0] = mod(starDrift[i][0] + STAR_DIR[0] * STAR_SPEED[i] * dt, m);
+    starDrift[i][1] = mod(starDrift[i][1] + STAR_DIR[1] * STAR_SPEED[i] * dt, m);
+  }
+  for (const k in NOFF) {
+    const [S, v] = NOFF[k];
+    nOff[k][0] = mod(nOff[k][0] + v[0] * dt, S); nOff[k][1] = mod(nOff[k][1] + v[1] * dt, S);
+  }
+  stepMeteors(dt);
+  stepPlanet(dt);
+}
+
+/* ======================================================================
+   Desktop icons (DOM, standalone demo)
+   ====================================================================== */
+const desktop = document.getElementById('desktop');
+let icons = [], layoutKind = 'mine', selected = null, drag = null, extraIdx = 0, layoutCapacity = 0;
+const grid = { cols: 1, rows: 1 };
+let DW = innerWidth, DH = innerHeight - TASKBAR;
+function computeGrid() {
+  DW = innerWidth; DH = innerHeight - TASKBAR;
+  grid.cols = Math.max(1, Math.floor((DW - GRID_X0) / CELL_W));
+  grid.rows = Math.max(1, Math.floor((DH - GRID_Y0) / CELL_H));
+}
+const cellPos = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H });
+const occupied = (x, y, self) => icons.some(ic => ic !== self && Math.abs(ic.x - x) < CELL_W / 2 && Math.abs(ic.y - y) < CELL_H / 2);
+function nearestFreeCell(cx, cy, self) {
+  let best = null, bd = Infinity;
+  for (let c = 0; c < grid.cols; c++) for (let r = 0; r < grid.rows; r++) {
+    const pos = cellPos(c, r);
+    if (occupied(pos.x, pos.y, self)) continue;
+    const dd = Math.hypot(pos.x + CELL_W / 2 - cx, pos.y + CELL_H / 2 - cy);
+    if (dd < bd) { bd = dd; best = pos; }
+  }
+  return best;
+}
+function addIcon([name, type], pos, born = false) {
+  const el = document.createElement('div');
+  el.className = 'icon' + (born ? ' born' : '');
+  el.innerHTML = `<div class="glyph"><svg viewBox="0 0 48 48">${glyphOf(name, type)}</svg></div><div class="label">${name}</div>`;
+  el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px';
+  desktop.appendChild(el);
+  const ic = { name, type, x: pos.x, y: pos.y, w: el.offsetWidth, h: el.offsetHeight, el };
+  icons.push(ic); bindDrag(ic);
+  return ic;
+}
+function setPos(ic, x, y) { ic.x = x; ic.y = y; ic.el.style.left = x + 'px'; ic.el.style.top = y + 'px'; }
+function select(ic) {
+  if (selected) selected.el.classList.remove('sel');
+  selected = ic;
+  if (ic) ic.el.classList.add('sel');
+}
+function bindDrag(ic) {
+  const el = ic.el;
+  el.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.stopPropagation(); select(ic);
+    el.setPointerCapture(e.pointerId); el.classList.remove('settle');
+    drag = { ic, sx: e.clientX, sy: e.clientY, ox: ic.x, oy: ic.y, moved: false };
+  });
+  el.addEventListener('pointermove', e => {
+    if (!drag || drag.ic !== ic) return;
+    const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true; el.classList.add('drag');
+    el.style.left = drag.ox + dx + 'px'; el.style.top = drag.oy + dy + 'px';
+  });
+  const end = (e, cancel) => {
+    if (!drag || drag.ic !== ic) return;
+    const d = drag; drag = null;
+    el.classList.remove('drag');
+    if (!d.moved) return;
+    let nx = cancel ? d.ox : d.ox + (e.clientX - d.sx), ny = cancel ? d.oy : d.oy + (e.clientY - d.sy);
+    nx = Math.min(Math.max(nx, 0), DW - ic.w); ny = Math.min(Math.max(ny, 0), DH - ic.h);
+    if (P.snap && !cancel) { const c = nearestFreeCell(nx + ic.w / 2, ny + ic.h / 2, ic); if (c) { nx = c.x; ny = c.y; } }
+    if (Math.hypot(nx - d.ox, ny - d.oy) < 0.5) { setPos(ic, nx, ny); return; }
+    el.classList.add('settle'); setPos(ic, nx, ny);
+    commit();
+  };
+  el.addEventListener('pointerup', e => end(e, false));
+  el.addEventListener('pointercancel', e => end(e, true));
+}
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+function applyLayout(kind) {
+  layoutKind = kind;
+  icons.forEach(ic => ic.el.remove()); icons = []; selected = null; extraIdx = 0;
+  computeGrid();
+  layoutCapacity = grid.cols * grid.rows;
+  if (kind === 'mine') {
+    for (const [c, r, name, type] of mineCells()) {
+      const pos = cellPos(Math.round(c * (grid.cols - 1) / 21), Math.round(r * (grid.rows - 1) / 9));
+      if (!occupied(pos.x, pos.y, null)) addIcon([name, type], pos);
+    }
+  } else if (kind === 'arranged') {
+    FILES.forEach((f, i) => { const c = Math.floor(i / grid.rows), r = i % grid.rows; if (c < grid.cols) addIcon(f, cellPos(c, r)); });
+  } else if (kind === 'messy') {
+    const rnd = mulberry32(20260928);
+    for (const f of FILES) for (let t = 0; t < 300; t++) {
+      const c = rnd() < 0.45 ? Math.floor(rnd() * Math.min(3, grid.cols)) : Math.floor(rnd() * grid.cols);
+      const pos = cellPos(c, Math.floor(rnd() * grid.rows));
+      if (!occupied(pos.x, pos.y, null)) { addIcon(f, pos); break; }
+    }
+  } else {
+    Array.from({ length: 10 }, (_, r) => [[0, r], [1, r]]).flat().concat([[2, 0], [2, 1], [2, 2], [3, 0], [3, 1], [3, 2], [Math.floor(grid.cols * 0.45), Math.floor(grid.rows * 0.5)]])
+      .forEach(([c, r], i) => addIcon(FILES[i], cellPos(Math.min(c, grid.cols - 1), Math.min(r, grid.rows - 1))));
+  }
+  meteors.length = 0;
+  commit(true);
+}
+
+/* ======================================================================
+   Size / main loop
+   ====================================================================== */
+function resize() {
+  W = innerWidth; H = innerHeight;
+  // Preview: the page is laid out at full desktop size and shrunk, so a low-res canvas is enough
+  const scale = PREVIEW ? 0.45 : Math.min(devicePixelRatio || 1, P.quality);
+  // Use the canvas' real (fractional) box size, otherwise the browser rescales the image and it blurs
+  const box = cv.getBoundingClientRect();
+  cv.width = Math.round((box.width || W) * scale); cv.height = Math.round((box.height || H) * scale); cv._scale = scale;
+  Gw = Math.ceil(W / STEP) + 2; Gh = Math.ceil(H / STEP) + 2;
+  buildNoise();
+  allocField();
+}
+
+const T0 = performance.now();
+let lastT = 0, fpsEMA = 0, frameN = 0, frameMs = 0;
+const px = new Uint8Array(4);
+let paused = false;                              // host: a maximized / fullscreen window is in front -> pause
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (paused) { lastT = 0; return; }
+  if (P.cap30 && now - lastT < 31) return;
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.03;
+  if (lastT) fpsEMA = fpsEMA ? fpsEMA * 0.9 + (1 / dt) * 0.1 : 1 / dt;
+  lastT = now;
+  const e = Math.min((now - morphT0) / morphDur, 1);
+  curMix = e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2;
+  stepScene(dt);
+  draw(now);
+  if (++frameN % 10 === 0) updateStats();
+}
+function spriteRect(U, x, y, w, h) { gl.uniform4f(U.uRect, x, y, w, h); }
+function draw(now) {
+  const measure = frameN % 20 === 0, t0 = performance.now();
+  const Wc = cv.width / cv._scale, Hc = cv.height / cv._scale;     // aligned with the real canvas pixels
+  gl.viewport(0, 0, cv.width, cv.height);
+  gl.disable(gl.BLEND);
+  // ---- fullscreen pass: sky, Milky Way, nebulae, starfields ----
+  {
+    const { p, U } = PR;
+    gl.useProgram(p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, noiseTex);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, ftex[fromI]);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, ftex[toI]);
+    gl.uniform1i(U.uNoise, 0); gl.uniform1i(U.uFA, 1); gl.uniform1i(U.uFB, 2);
+    gl.uniform2f(U.uRes, Wc, Hc);
+    gl.uniform2f(U.uGrid, Gw, Gh);
+    gl.uniform1f(U.uScale, cv._scale);
+    gl.uniform1f(U.uSeed, (seed % 997) * 0.37);
+    gl.uniform1f(U.uStep, STEP);
+    gl.uniform1f(U.uMix, curMix);
+    gl.uniform1f(U.uDebug, P.debug ? 1 : 0);
+    gl.uniform1f(U.uStars, P.stars);
+    gl.uniform1f(U.uTw, twT);
+    gl.uniform1f(U.uBreath, breath);
+    gl.uniform2f(U.uD0, ...starDrift[0]); gl.uniform2f(U.uD1, ...starDrift[1]); gl.uniform2f(U.uD2, ...starDrift[2]);
+    gl.uniform2f(U.uW1, ...nOff.W1); gl.uniform2f(U.uW2, ...nOff.W2); gl.uniform2f(U.uW3, ...nOff.W3);
+    gl.uniform2f(U.uWh, ...nOff.Wh); gl.uniform2f(U.uWw, ...nOff.Ww);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  // ---- local passes: planet and shooting stars, each only over its own small rectangle ----
+  const showPlanet = planet.a > 0.003, showMeteors = meteors.length > 0;
+  if (showPlanet || showMeteors) {
+    const { p, U } = SPR;
+    gl.useProgram(p);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.uniform2f(U.uRes, Wc, Hc);
+    gl.uniform1f(U.uScale, cv._scale);
+    if (showPlanet) {
+      const R = planet.R, tilt = -0.36 + 0.03 * Math.sin(flowT * 0.05);
+      const mo = planet.ph, mx = Math.cos(mo) * R * 2.75, my = Math.sin(mo) * R * 0.85;
+      const mrx = Math.cos(tilt) * mx - Math.sin(tilt) * my, mry = Math.sin(tilt) * mx + Math.cos(tilt) * my;
+      const ext = R * 3.6;
+      gl.uniform1i(U.uKind, 1);
+      gl.uniform1f(U.uAlpha, planet.a * planet.a * (3 - 2 * planet.a));
+      gl.uniform4f(U.uA, planet.px, planet.py, R, tilt);
+      gl.uniform4f(U.uB, mrx, mry, Math.sin(mo), planet.spin);
+      spriteRect(U, planet.px - ext, planet.py - ext, ext * 2, ext * 2);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    gl.uniform1i(U.uKind, 0);
+    for (const m of meteors) {
+      const u = m.t / m.dur, e = 1 - Math.pow(1 - u, 1.6);           // decelerates slightly as it burns out
+      const hd = m.len * e, hx = m.x0 + m.dx * hd, hy = m.y0 + m.dy * hd;
+      const tl = Math.min(hd, m.tail * Math.min(1, u * 3)), tx = hx - m.dx * tl, ty = hy - m.dy * tl;
+      const alpha = Math.min(1, u / 0.12) * (1 - Math.max(0, (u - 0.6) / 0.4));
+      gl.uniform1f(U.uAlpha, alpha);
+      gl.uniform4f(U.uA, hx, hy, tx, ty);
+      const pad = 26, x0 = Math.min(hx, tx) - pad, y0 = Math.min(hy, ty) - pad;
+      spriteRect(U, x0, y0, Math.abs(hx - tx) + pad * 2, Math.abs(hy - ty) + pad * 2);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    gl.disable(gl.BLEND);
+  }
+  if (measure) { gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); frameMs = performance.now() - t0; }
+}
+
+/* ======================================================================
+   Panel
+   ====================================================================== */
+const statsEl = document.getElementById('stats');
+const GPU = (() => {
+  const ext = gl.getExtension('WEBGL_debug_renderer_info');
+  const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  return name.replace(/^ANGLE \([^,]+,\s*/, '').replace(/\s*\(0x[0-9a-f]+\).*$/i, '')
+    .replace(/\s*(Direct3D|vs_|OpenGL).*$/, '').replace(/\(R\)|\(TM\)/g, '').trim();
+})();
+function updateStats() {
+  statsEl.innerHTML =
+    `<span class="live">● running · ${fpsEMA.toFixed(0)} fps</span><br>GPU ${GPU}<br>` +
+    `frame ${frameMs.toFixed(1)} ms · field ${fieldMs.toFixed(0)} ms<br>` +
+    `canvas ${cv.width}×${cv.height} · icons ${icons.length}`;
+}
+function syncPanel() {
+  document.querySelectorAll('.seg button').forEach(b => b.classList.toggle('on', b.dataset.v === layoutKind));
+  document.querySelectorAll('.toggles input').forEach(inp => { inp.checked = !!P[inp.dataset.key]; });
+}
+const slidersEl = document.getElementById('sliders');
+for (const s of SLIDERS) {
+  const wrap = document.createElement('div');
+  wrap.className = 'slider';
+  wrap.innerHTML = `<div class="row"><span>${s.label}</span><span></span></div><input type="range" min="${s.min}" max="${s.max}" step="${s.step}" value="${P[s.key]}">`;
+  const out = wrap.querySelector('.row span:last-child'), inp = wrap.querySelector('input');
+  out.textContent = s.fmt(P[s.key]);
+  inp.addEventListener('input', () => {
+    P[s.key] = +inp.value; out.textContent = s.fmt(P[s.key]);
+    if (s.act === 'field') refresh();
+  });
+  slidersEl.appendChild(wrap);
+}
+document.querySelector('.seg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  applyLayout(b.dataset.v); syncPanel();
+});
+document.querySelectorAll('.toggles input').forEach(inp => inp.addEventListener('change', () => {
+  const k = inp.dataset.key;
+  if (DISPLAY_KEYS.includes(k)) applySettings({ [k]: inp.checked ? 1 : 0 });
+  else P[k] = inp.checked;
+}));
+document.getElementById('collapse').addEventListener('click', () => {
+  const p = document.getElementById('panel');
+  p.classList.toggle('collapsed');
+  document.getElementById('collapse').textContent = p.classList.contains('collapsed') ? '+' : '–';
+});
+// New sky: a new seed (settings window "refresh", panel button). Before the first icons message only remember it
+let iconsSeen = !(WALL || PREVIEW);
+function reseed(v) {
+  seed = v; buildNoise();
+  if (!iconsSeen) return;
+  commit(true);
+}
+document.getElementById('btnSeed').addEventListener('click', () => reseed((Math.random() * 1e6) | 0));
+document.getElementById('btnMeteor').addEventListener('click', () => spawnMeteor());
+document.getElementById('btnAdd').addEventListener('click', () => {
+  const f = EXTRA[extraIdx++ % EXTRA.length];
+  let pos = null;
+  for (let t = 0; t < 300 && !pos; t++) {
+    const c = cellPos(Math.floor(Math.random() * grid.cols), Math.floor(Math.random() * grid.rows));
+    if (!occupied(c.x, c.y, null)) pos = c;
+  }
+  if (!pos) return;
+  const ic = addIcon(f, pos, true);
+  select(ic);
+  commit();
+});
+desktop.addEventListener('pointerdown', () => select(null));
+addEventListener('keydown', e => {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+    const ic = selected; select(null); ic.el.remove(); icons = icons.filter(x => x !== ic); commit();
+  } else if (e.key === 'h' || e.key === 'H') document.getElementById('panel').classList.toggle('hidden');
+});
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => {
+    meteors.length = 0;
+    if (WALL || PREVIEW) { resize(); refresh(); return; }
+    resize(); computeGrid();
+    if (grid.cols * grid.rows > layoutCapacity && layoutCapacity < 40) { applyLayout(layoutKind); syncPanel(); return; }
+    for (const ic of icons) setPos(ic, Math.min(ic.x, Math.max(0, DW - ic.w)), Math.min(ic.y, Math.max(0, DH - ic.h)));
+    refresh();
+  }, 100);
+});
+function tickClock() {
+  const d = new Date(), z = n => String(n).padStart(2, '0');
+  document.getElementById('clock').innerHTML = `${z(d.getHours())}:${z(d.getMinutes())}<br>${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+setInterval(tickClock, 15000); tickClock();
+
+/* ---------- start ---------- */
+window.__dbg = {
+  P, applyLayout, spawnMeteor, planet, meteors,
+  get icons() { return icons; },
+  moveIcon(i, x, y) { const ic = icons[i]; if (!ic) return false; if (ic.el) setPos(ic, x, y); else { ic.x = x; ic.y = y; } commit(); return true; },
+  bench() {
+    const ts = [];
+    for (let i = 0; i < 10; i++) { const a = performance.now(); draw(performance.now()); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); ts.push(performance.now() - a); }
+    ts.sort((a, b) => a - b);
+    return { frame: +ts[5].toFixed(1), canvas: cv.width + 'x' + cv.height, gpu: GPU };
+  },
+};
+resize();
+buildNoiseTex();
+if (WALL || PREVIEW) startHostedMode();
+else { applyLayout('mine'); syncPanel(); }
+requestAnimationFrame(frame);
+
+/* ======================================================================
+   Hosted mode: driven from outside
+   - wallpaper (?wallpaper=1): the desktop host sends messages through WebView2
+   - preview (?preview=1): the settings window (settings.html) posts messages to this iframe
+   Messages: icons (real icon rects, physical px) / settings (partial) / reset (defaults) / pause
+   ====================================================================== */
+// Only accept keys that exist as sliders or display options; nebula size needs a new field
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);
+  let field = false, adaptiveChanged = false;
+  for (const k in v) {
+    if ((!SLIDERS.some(s => s.key === k) && !DISPLAY_KEYS.includes(k)) || typeof v[k] !== typeof P[k] || P[k] === v[k]) continue;
+    if (DISPLAY_KEYS.includes(k) && v[k] !== 0 && v[k] !== 1) continue;
+    if (!Number.isFinite(v[k])) continue;
+    const s = SLIDERS.find(s => s.key === k);
+    P[k] = s ? Math.min(s.max, Math.max(s.min, v[k])) : v[k];
+    if (k === 'adaptive') adaptiveChanged = true;
+    if (k === 'sigma') field = true;
+  }
+  if (adaptiveChanged && FB) commit();
+  else if (field && FB) refresh();
+}
+
+function drawGhosts() {
+  const box = document.getElementById('ghosts');
+  box.innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+
+function startHostedMode() {
+  document.body.classList.add('wall');
+  if (PREVIEW) {
+    document.body.classList.add('preview');
+    const g = document.createElement('div'); g.id = 'ghosts'; document.body.appendChild(g);
+  }
+  icons = [];
+  commit(true);                                   // an empty night sky until we know where the icons are
+  let first = true;
+  const handle = m => {
+    if (!m || typeof m !== 'object') return;
+    if (m.t === 'pause') { paused = PREVIEW ? false : !!m.v; return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;       // physical px -> CSS px
+    icons = m.vis && Array.isArray(m.r) ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    meteors.length = 0;
+    commit(first);                                // first time: nebulae bloom in; later: they glide with the icons
+    first = false;
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => { if (ev.source === parent) handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data));
+  host.postMessage('ready');
+}
+</script>
+<script src="share.js"></script>   <!-- share image / share animation (sample icons, labels as blocks) -->
+</body>
+</html>

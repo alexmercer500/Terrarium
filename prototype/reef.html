@@ -1,0 +1,1587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terrarium · Coral Reef</title>
+<!--
+  Terrarium · Coral Reef theme (top-down, WebGL2)
+  - Every desktop icon sits on a reef flat: warm sand ringed by coral (brain, branching, fan, sponge)
+    with seagrass tufts, urchins and the odd starfish. Away from the icons the water drops off to deep teal/blue,
+    with a few small coral bommies scattered in open water.
+  - The bed (sand, coral, seagrass, depth tint) is static: it is rendered once per field change into a texture.
+    Every frame only a cheap water pass runs (refraction shimmer + caustics from a noise / Voronoi texture),
+    then fish schools and a sea turtle are drawn as small instanced quads with their soft shadows.
+  - Fish schools follow their leader's trail; leaders steer around reef patches using the field gradient.
+-->
+<style>
+  :root { --taskbar: 48px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d5a72; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
+
+  .icon {
+    position: absolute; width: 76px; padding: 4px 2px 5px;
+    display: flex; flex-direction: column; align-items: center;
+    border: 1px solid transparent; border-radius: 4px;
+    user-select: none; touch-action: none; cursor: default;
+  }
+  .icon:hover { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.24); }
+  .icon.sel { background: rgba(0,120,215,.34); border-color: rgba(140,200,255,.7); }
+  .icon.drag { opacity: .88; z-index: 10; transform: scale(1.04); }
+  .icon.settle { transition: left .22s cubic-bezier(.2,.8,.3,1), top .22s cubic-bezier(.2,.8,.3,1); }
+  .icon.born { animation: born .45s cubic-bezier(.2,.9,.3,1.2); }
+  @keyframes born { from { opacity: 0; transform: scale(.6); } }
+  .glyph { width: 48px; height: 48px; filter: drop-shadow(0 1px 1px rgba(0,0,0,.25)) drop-shadow(3px 6px 4px rgba(20,60,80,.25)); pointer-events: none; }
+  .glyph svg { width: 100%; height: 100%; display: block; }
+  .label {
+    margin-top: 3px; max-width: 72px; font-size: 12px; line-height: 15px; color: #fff; text-align: center;
+    text-shadow: 0 0 2px rgba(0,0,0,.95), 0 1px 3px rgba(0,0,0,.85);
+    word-break: break-word; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    pointer-events: none;
+  }
+
+  #taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--taskbar);
+    background: rgba(20,30,38,.6); backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    border-top: 1px solid rgba(255,255,255,.08);
+    display: flex; align-items: center; justify-content: center; z-index: 40;
+  }
+  #taskbar .apps { display: flex; gap: 4px; }
+  #taskbar .app { width: 40px; height: 40px; border-radius: 4px; display: grid; place-items: center; }
+  #taskbar .app:hover { background: rgba(255,255,255,.08); }
+  #taskbar .app svg { width: 24px; height: 24px; }
+  #clock { position: absolute; right: 14px; color: #fff; font-size: 12px; line-height: 16px; text-align: right; }
+
+  #panel {
+    position: fixed; top: 14px; right: 14px; width: 284px; max-height: calc(100vh - var(--taskbar) - 28px); overflow: auto;
+    background: rgba(8,44,60,.76); backdrop-filter: blur(18px) saturate(1.3); -webkit-backdrop-filter: blur(18px) saturate(1.3);
+    color: #eef6f5; border: 1px solid rgba(255,255,255,.14); border-radius: 12px;
+    font-size: 12px; line-height: 1.4; box-shadow: 0 12px 32px rgba(0,0,0,.25); z-index: 50;
+  }
+  #panel.hidden { display: none; }
+  /* Wallpaper mode (?wallpaper=1, loaded by the desktop host): Windows draws the real icons and taskbar */
+  body.wall #panel, body.wall #taskbar, body.wall #desktop { display: none; }
+  /* Preview mode (?preview=1, inside the settings window): translucent boxes mark where the real icons are */
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.preview #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(10,50,70,.28); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+  #panel header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 10px; }
+  #panel header b { font-size: 14px; letter-spacing: .06em; }
+  #panel header span { margin-left: 8px; opacity: .55; }
+  #panel.collapsed .body { display: none; }
+  .ibtn { background: none; border: 0; color: inherit; opacity: .6; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; }
+  .ibtn:hover { opacity: 1; }
+  #panel .body { padding: 0 14px 14px; }
+  .sec { margin-top: 12px; }
+  .sec > .t { opacity: .6; margin-bottom: 6px; }
+  .seg { display: grid; grid-template-columns: repeat(4, 1fr); background: rgba(255,255,255,.06); border-radius: 7px; padding: 2px; gap: 2px; }
+  .seg button { background: none; border: 0; color: inherit; padding: 5px 0; border-radius: 5px; cursor: pointer; font: inherit; opacity: .75; white-space: nowrap; }
+  .seg button:hover { opacity: 1; }
+  .seg button.on { background: rgba(255,255,255,.17); opacity: 1; }
+  .slider { margin-top: 9px; }
+  .slider .row { display: flex; justify-content: space-between; }
+  .slider .row span:last-child { opacity: .6; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; margin: 4px 0 0; accent-color: #ff9a7a; }
+  .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; }
+  .toggles label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .toggles input { accent-color: #ff9a7a; margin: 0; }
+  .btns { display: flex; gap: 6px; }
+  .btns button {
+    flex: 1; font: inherit; color: inherit; cursor: pointer; padding: 7px 0; border-radius: 7px;
+    background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.1);
+  }
+  .btns button:hover { background: rgba(255,255,255,.18); }
+  #stats { margin-top: 12px; padding: 8px 10px; border-radius: 7px; background: rgba(0,0,0,.25); font-family: Consolas, "Cascadia Mono", monospace; font-size: 11px; line-height: 1.6; color: #d4e4e2; }
+  #stats .live { color: #ffb49a; }
+  .hint { margin-top: 10px; opacity: .5; font-size: 11px; line-height: 1.6; }
+  #nogl { position: fixed; inset: 0; display: none; place-items: center; color: #fff; font-size: 16px; }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="desktop"></div>
+
+<div id="taskbar">
+  <div class="apps">
+    <div class="app"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="12.5" y="2" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="2" y="12.5" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="12.5" y="12.5" width="9.5" height="9.5" fill="#4cc2ff"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="#fff" stroke-width="2"/><path d="M15 15l5 5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v1H2z" fill="#e09b1d"/><path d="M2 9h20v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z" fill="#ffc83d"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#1b8fd6"/><path d="M6 13c1-5 11-6 12 0-3-2-8-2-9 2 0 2 2 3 4 3-4 1-7-1-7-5z" fill="#6fe37a" opacity=".9"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2.5" fill="#2b2b2b" stroke="#777"/><path d="M6 9l3 3-3 3M11 15h6" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg></div>
+  </div>
+  <div id="clock"></div>
+</div>
+
+<aside id="panel">
+  <header>
+    <div><b>Terrarium</b><span>Coral Reef · prototype</span></div>
+    <div><button class="ibtn" id="collapse" title="Collapse">–</button></div>
+  </header>
+  <div class="body">
+    <div class="sec"><div class="t">Desktop layout</div>
+      <div class="seg">
+        <button data-v="mine">Busy</button><button data-v="arranged">Arranged</button><button data-v="messy">Messy</button><button data-v="minimal">Minimal</button>
+      </div>
+    </div>
+    <div class="sec" id="sliders"></div>
+    <div class="sec toggles">
+      <label><input type="checkbox" data-key="showTurtle">Sea turtle</label>
+      <label><input type="checkbox" data-key="snap">Snap to grid</label>
+      <label><input type="checkbox" data-key="cap30">Cap 30 fps</label>
+    </div>
+    <div class="sec btns">
+      <button id="btnAdd">+ New file</button>
+      <button id="btnSeed">New reef</button>
+    </div>
+    <div id="stats"></div>
+    <div class="hint">Drag icons: the reef regrows around them<br>Del deletes · H hides this panel</div>
+  </div>
+</aside>
+<div id="nogl">WebGL2 is not available in this browser.</div>
+
+<script>
+'use strict';
+
+/* ======================================================================
+   Parameters
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
+const STEP = 5;
+const MORPH_MS = 1800;
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');      // wallpaper mode: loaded by the desktop host, messages come from the host
+const PREVIEW = QS.has('preview');     // preview mode: settings window iframe, messages come from the parent page
+// Defaults must match the `default` values of the reef entry in themes.json; quality is not exposed
+const P = {
+  sigma: 72, caustics: 0.6, fish: 0.5, flow: 1, quality: 2,
+  snap: true, cap30: true,
+  showTurtle: 1, adaptive: 1,
+};
+const DEFAULTS = Object.assign({}, P);
+const DISPLAY_KEYS = ['showTurtle', 'adaptive'];
+const SLIDERS = [
+  { key: 'sigma',    label: 'Reef size',   min: 40, max: 200, step: 1,    fmt: v => v + ' px', act: 'field' },
+  { key: 'caustics', label: 'Caustics',    min: 0,  max: 1,   step: 0.01, fmt: v => Math.round(v * 100) + '%' },
+  { key: 'fish',     label: 'Fish',        min: 0,  max: 1,   step: 0.01, fmt: v => Math.round(v * 100) + '%' },
+  { key: 'flow',     label: 'Swim speed',  min: 0,  max: 3,   step: 0.05, fmt: v => '×' + v.toFixed(2) },
+];
+
+/* ======================================================================
+   Mock desktop icons and layouts (standalone demo only)
+   ====================================================================== */
+const PAGE = '<path d="M12 4h17l9 9v29a2 2 0 0 1-2 2H12a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" fill="#fbfbfb" stroke="#c4c4c4"/><path d="M29 4v7a2 2 0 0 0 2 2h7z" fill="#dedede"/>';
+const LINES = '<path d="M24 20h10M24 25h10M24 30h10M24 35h10" stroke="#c9c9c9" stroke-width="1.6"/>';
+const badge = (color, text, size = 11) => `<rect x="4" y="21" width="19" height="19" rx="3" fill="${color}"/><text x="13.5" y="34.5" text-anchor="middle" font-family="Segoe UI,Arial" font-weight="700" font-size="${size}" fill="#fff">${text}</text>`;
+const SVG = {
+  folder: '<path d="M4 12a3 3 0 0 1 3-3h11l4 4h19a3 3 0 0 1 3 3v2H4z" fill="#e09b1d"/><path d="M4 17h40v20a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3z" fill="#ffc83d"/><path d="M4 17h40v2.5H4z" fill="#ffd978"/>',
+  docx: PAGE + LINES + badge('#185abd', 'W'),
+  xlsx: PAGE + '<path d="M24 19h11v17H24zM24 24.5h11M24 30h11M29.5 19v17" stroke="#9ac9a9" stroke-width="1.3" fill="none"/>' + badge('#107c41', 'X'),
+  pdf:  PAGE + LINES + badge('#d33a2c', 'PDF', 7.5),
+  cad:  PAGE + LINES + badge('#2a7fd4', 'DWG', 7),
+  txt:  PAGE + '<path d="M16 18h16M16 23h16M16 28h16M16 33h10" stroke="#9a9a9a" stroke-width="1.6"/>',
+  png:  PAGE + '<rect x="14" y="17" width="20" height="17" rx="1.5" fill="#8fd0f5"/><path d="M14 30l6-6 5 5 3-3 6 6v1.5a1.5 1.5 0 0 1-1.5 1.5h-17A1.5 1.5 0 0 1 14 34z" fill="#3fa35a"/><circle cx="29" cy="21.5" r="2" fill="#fff4b8"/>',
+  shot: '<rect x="3" y="13" width="42" height="25" rx="1" fill="#1d2129" stroke="#f2f2f2" stroke-width="1.5"/><rect x="6" y="16" width="14" height="3" fill="#5b8def"/><rect x="6" y="21" width="22" height="2" fill="#6c7280"/><rect x="6" y="25" width="18" height="2" fill="#6c7280"/><rect x="31" y="16" width="11" height="18" fill="#2e3440"/>',
+  zip:  PAGE + '<path d="M22 4v4h3v3h-3v3h3v3h-3v3h3v3h-3" stroke="#8a6d3b" stroke-width="2" fill="none"/><rect x="20" y="26" width="7" height="8" rx="1" fill="#8a6d3b"/>',
+  bin:  '<path d="M12 14h24l-2.5 27a3 3 0 0 1-3 2.7H17.5a3 3 0 0 1-3-2.7z" fill="rgba(215,235,250,.55)" stroke="rgba(255,255,255,.9)" stroke-width="1.2"/><path d="M10 12.5h28" stroke="rgba(255,255,255,.95)" stroke-width="2.4" stroke-linecap="round"/><path d="M19 19l1 19M24 19v19M29 19l-1 19" stroke="rgba(255,255,255,.7)" stroke-width="1.2"/>',
+  pc:   '<rect x="5" y="8" width="38" height="26" rx="2" fill="#1f8fe0" stroke="#bfe3ff" stroke-width="1.5"/><path d="M5 30h38" stroke="#0d5fa8" stroke-width="3"/><path d="M19 34l-2 6h14l-2-6z" fill="#9aa7b4"/>',
+};
+const APP_COLORS = ['#e8553e','#2f7de1','#18a058','#8b5cf6','#f59e0b','#0ea5a4','#db2777','#334155','#16a34a','#2563eb'];
+function appSVG(name) {
+  let h = 0; for (const ch of name) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return `<rect x="5" y="5" width="38" height="38" rx="9" fill="${APP_COLORS[h % APP_COLORS.length]}"/><path d="M5 14a9 9 0 0 1 9-9h20a9 9 0 0 1 9 9v6H5z" fill="#fff" opacity=".14"/>` +
+    `<text x="24" y="31.5" text-anchor="middle" font-family="Segoe UI,Arial" font-weight="700" font-size="18" fill="#fff">${[...name][0]}</text>`;
+}
+const glyphOf = (name, type) => type === 'app' ? appSVG(name) : SVG[type];
+
+const FILES = [
+  ['Recycle Bin','bin'], ['Projects','folder'], ['2026 Quote.xlsx','xlsx'], ['Product spec.docx','docx'],
+  ['Screenshot_0927.png','png'], ['Contract scan.pdf','pdf'], ['New folder','folder'], ['Design assets','folder'],
+  ['Travel photos','folder'], ['Installer.zip','zip'], ['Meeting notes.docx','docx'], ['Wallpaper ideas','folder'],
+  ['Weekly report.xlsx','xlsx'], ['Sketch.png','png'], ['Old backup','folder'], ['Photo.png','png'], ['Manual.pdf','pdf'], ['Resume.docx','docx'],
+  ['Expenses.xlsx','xlsx'], ['Backup.zip','zip'], ['Reference.png','png'], ['Downloads','folder'], ['Stickers.png','png'], ['Payslip.xlsx','xlsx'],
+  ['Lease.pdf','pdf'], ['Journal.docx','docx'], ['Desktop.png','png'],
+];
+const EXTRA = [
+  ['New Text Document.txt','txt'], ['New folder (2)','folder'], ['Invoice.pdf','pdf'], ['Data export.xlsx','xlsx'],
+  ['Screenshot_0928.png','png'], ['Memo.txt','txt'], ['Archive.zip','zip'], ['New folder (3)','folder'],
+];
+const APPS = ['Recycle Bin','This PC','WeChat','Lark','Slack','Zoom','Spotify','CapCut','Photoshop','Obsidian','VS Code','Krita',
+  'AutoCAD','Rhino','KeyShot','Dropbox','Chrome','Blender','Figma','Notion','Discord','Steam','Eagle','OBS','Kimi','PureRef','ShareX','NX 12.0','MarkText','Codex'];
+const MISC = [['projects','folder'],['Games','folder'],['todolist','folder'],['OKR.xlsx','xlsx'],['Fixed costs.xlsx','xlsx'],
+  ['pdfarrange','app'],['stp.log','txt'],['part.stp','txt'],['part.3dm','png'],['Preview','folder']];
+const RIGHT = [['plot.log','txt'],['Tools','folder'],['archive.rar','zip'],['1685x128.png','png'],['image.jpg','png'],['0914.png','png'],
+  ['image 2.jpg','png'],['images.png','png'],['Contents.docx','docx'],['api.txt','txt'],['c4ef.png','png'],['0918.png','png'],
+  ['Board rev.pdf','pdf'],['recommend.txt','txt'],['button.stp','txt'],['New Text (2).txt','txt'],['ugstep21','txt'],['New Text (3).txt','txt'],
+  ['Work plan.txt','txt'],['image 3.jpg','png'],['New DOCX.docx','docx'],['SEO.txt','txt'],['resend.txt','txt'],['Intro.txt','txt'],
+  ['USER.pdf','pdf'],['New Text.txt','txt'],['Chair.pur','png'],['PAP-20.pdf','pdf'],['Slides.pptx','pdf'],['Issues.txt','txt']];
+function mineCells() {
+  const out = []; let a = 0, m = 0, rgt = 0, sh = 0;
+  for (let c = 0; c < 3; c++) for (let r = 0; r < 10; r++) {
+    const name = APPS[a++];
+    out.push([c, r, name, name === 'Recycle Bin' ? 'bin' : name === 'This PC' ? 'pc' : 'app']);
+  }
+  for (let r = 0; r < 10; r++) out.push([3, r, ...MISC[m++]]);
+  for (let r = 0; r < 5; r++) out.push([5, r, `Part layout ${r + 1}.dwg`, 'cad']);
+  out.push([6, 0, 'leg-test.bak', 'txt']);
+  for (const [c, r] of [[6,4],[6,5],[6,6],[6,7],[6,8],[7,3],[7,4],[7,5],[7,6],[7,7],[8,4],[8,5],[8,6],[9,2],[9,3],[9,4],[9,5],[9,6]])
+    out.push([c, r, `ScreenShot ${++sh}.png`, 'shot']);
+  for (const [c, r] of [[11,1],[11,2],[11,3],[12,1],[12,2],[12,3],[12,4],[13,1],[13,2],[13,3],[13,4],[14,1],[14,3],[14,4],[15,1],[15,6],
+    [16,4],[16,6],[17,4],[17,5],[17,6],[17,7],[19,4],[19,5],[19,8],[20,0],[20,4],[20,6],[21,0],[21,5],[21,6]]) {
+    const f = RIGHT[rgt++ % RIGHT.length]; out.push([c, r, f[0], f[1]]);
+  }
+  return out;
+}
+
+/* ======================================================================
+   CPU noise + tileable noise / caustic textures
+   ====================================================================== */
+let seed = (Math.random() * 1e6) | 0;
+function hash2(x, y, k = 0) {
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(seed + k, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x, y, k = 0) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy, k), b = hash2(ix + 1, iy, k), c = hash2(ix, iy + 1, k), d = hash2(ix + 1, iy + 1, k);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+function fbm(x, y, k = 0) {
+  let a = 0.5, s = 0;
+  for (let i = 0; i < 4; i++) { s += a * vnoise(x, y, k + i * 7); x = x * 2.03 + 17.1; y = y * 2.03 + 17.1; a *= 0.5; }
+  return s;
+}
+function tileNoise(x, y, px, py, k) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const m = (v, p) => ((v % p) + p) % p;
+  const x0 = m(ix, px), x1 = m(ix + 1, px), y0 = m(iy, py), y1 = m(iy + 1, py);
+  const a = hash2(x0, y0, k), b = hash2(x1, y0, k), c = hash2(x0, y1, k), d = hash2(x1, y1, k);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+function tileFbm(u, v, periods, k) {
+  let s = 0, w = 0.5, tw = 0;
+  for (let i = 0; i < periods.length; i++) { s += w * tileNoise(u * periods[i], v * periods[i], periods[i], periods[i], k + i * 13); tw += w; w *= 0.5; }
+  return s / tw;
+}
+function makeNoiseImage() {
+  const S = 256, d = new Uint8Array(S * S * 4);
+  const chans = [[8, 16, 32, 64], [8, 16, 32, 64], [8, 16, 32], [16, 32, 64, 128]];
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = x / S, v = y / S, i = (y * S + x) * 4;
+    for (let c = 0; c < 4; c++) {
+      const n = tileFbm(u, v, chans[c], 100 + c * 50);
+      d[i + c] = Math.min(Math.max((n - 0.5) * 1.9 + 0.5, 0), 1) * 255;
+    }
+  }
+  return { S, d };
+}
+// Tileable caustic network: bright thin lines along the edges of a jittered Voronoi diagram
+function makeCausticImage() {
+  const S = 256, G = 7, cell = S / G, d = new Uint8Array(S * S);
+  const pts = [];
+  for (let j = 0; j < G; j++) for (let i = 0; i < G; i++)
+    pts.push([(i + 0.15 + 0.7 * hash2(i, j, 901)) * cell, (j + 0.15 + 0.7 * hash2(i, j, 902)) * cell]);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    let f1 = 1e9, f2 = 1e9;
+    const ci = Math.floor(x / cell), cj = Math.floor(y / cell);
+    for (let dj = -2; dj <= 2; dj++) for (let di = -2; di <= 2; di++) {
+      const ii = ((ci + di) % G + G) % G, jj = ((cj + dj) % G + G) % G;
+      const p = pts[jj * G + ii];
+      const px = p[0] + Math.floor((ci + di) / G) * S - 0, py = p[1] + Math.floor((cj + dj) / G) * S;
+      const qx = px + (ci + di - ii - Math.floor((ci + di) / G) * G) * cell, qy = py + (cj + dj - jj - Math.floor((cj + dj) / G) * G) * cell;
+      const dd = Math.hypot(qx - x, qy - y);
+      if (dd < f1) { f2 = f1; f1 = dd; } else if (dd < f2) f2 = dd;
+    }
+    const e = (f2 - f1) / cell;
+    d[y * S + x] = Math.round(255 * Math.exp(-e * 9) * (0.75 + 0.25 * Math.min(f1 / cell * 2, 1)));
+  }
+  return { S, d };
+}
+
+/* ======================================================================
+   Reef field (CPU): r = signed distance to the reef-patch edge (<0 inside a patch),
+                     g = plain distance to the nearest real icon box (keeps coral off the icons)
+   ====================================================================== */
+let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1, NZ = null;
+function buildNoise() {
+  const N = Gw * Gh;
+  NZ = { wx: new Float32Array(N), wy: new Float32Array(N) };
+  for (let gy = 0; gy < Gh; gy++) for (let gx = 0; gx < Gw; gx++) {
+    const i = gy * Gw + gx, x = gx * STEP, y = gy * STEP;
+    NZ.wx[i] = fbm(x * 0.0028, y * 0.0028, 1) - 0.47;
+    NZ.wy[i] = fbm(x * 0.0028, y * 0.0028, 2) - 0.47;
+  }
+}
+const sstep = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0), 1); return t * t * (3 - 2 * t); };
+const sminJS = (a, b, k) => { const h = Math.min(Math.max(0.5 + 0.5 * (b - a) / k, 0), 1); return b + (a - b) * h - k * h * (1 - h); };
+const rectDist = (x, y, r) => Math.hypot(Math.max(Math.abs(x - r.cx) - r.fw, 0), Math.max(Math.abs(y - r.cy) - r.fh, 0));
+// Small coral bommies scattered in open water (seeded), kept well clear of the icons
+function bommies(rects) {
+  const out = [], G = 330;
+  for (let gy = -1; gy <= Math.ceil(H / G); gy++) for (let gx = -1; gx <= Math.ceil(W / G); gx++) {
+    if (hash2(gx, gy, 501) > 0.36) continue;
+    const x = (gx + 0.2 + 0.6 * hash2(gx, gy, 502)) * G, y = (gy + 0.2 + 0.6 * hash2(gx, gy, 503)) * G;
+    const r = 16 + 34 * Math.pow(hash2(gx, gy, 504), 1.4);
+    if (y > H - TASKBAR - r * 0.5) continue;
+    let ok = true;
+    for (const q of rects) if (rectDist(x, y, q) < P.sigma * 1.5 + r + 70) { ok = false; break; }
+    if (ok) out.push({ x, y, r });
+  }
+  return out;
+}
+let fieldMs = 0;
+function computeField(rects) {
+  const t0 = performance.now();
+  const N = Gw * Gh, f1 = new Float32Array(N), di = new Float32Array(N).fill(400);
+  const sig = P.sigma, is1 = 1 / (sig * sig);
+  const wa = 40 * 2.2, wmax = wa * 0.5;
+  for (const r of rects) {
+    const R = 5.5 * sig + Math.max(r.hw, r.hh) * 0.5 + wmax;
+    const gx0 = Math.max(0, Math.floor((r.cx - R) / STEP)), gx1 = Math.min(Gw - 1, Math.ceil((r.cx + R) / STEP));
+    const gy0 = Math.max(0, Math.floor((r.cy - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((r.cy + R) / STEP));
+    const chw = r.hw * 0.5, chh = r.hh * 0.5;
+    for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+      const i = gy * Gw + gx, x = gx * STEP, y = gy * STEP;
+      const qx = x + NZ.wx[i] * wa, qy = y + NZ.wy[i] * wa;
+      let dx = Math.abs(qx - r.cx) - chw, dy = Math.abs(qy - r.cy) - chh;
+      if (dx < 0) dx = 0; if (dy < 0) dy = 0;
+      f1[i] += Math.exp(-(dx * dx + dy * dy) * is1);
+      const d = rectDist(x, y, r);
+      if (d < di[i]) di[i] = d;
+    }
+  }
+  // Floor = contribution at the edge of the evaluated range, so there are no box-shaped seams in deep water
+  const c0 = Math.sqrt(-Math.log(0.35)), s = new Float32Array(N), fMin = Math.exp(-30);
+  for (let i = 0; i < N; i++) {
+    const g = Math.log(Math.max(f1[i], fMin));
+    s[i] = sig * (Math.sqrt(Math.max(-g, 0)) - c0) - sig * 0.6 * Math.max(g, 0);
+  }
+  // Open-water bommies: a plain (warped) circle distance merged in with a smooth min
+  for (const b of bommies(rects)) {
+    const R = b.r + sig * (Math.sqrt(30) - c0) + wmax + 30;   // far enough that the smooth min no longer changes s (no box seams)
+    const gx0 = Math.max(0, Math.floor((b.x - R) / STEP)), gx1 = Math.min(Gw - 1, Math.ceil((b.x + R) / STEP));
+    const gy0 = Math.max(0, Math.floor((b.y - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((b.y + R) / STEP));
+    for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+      const i = gy * Gw + gx;
+      const d = Math.hypot(gx * STEP + NZ.wx[i] * wa * 0.5 - b.x, gy * STEP + NZ.wy[i] * wa * 0.5 - b.y) - b.r;
+      s[i] = sminJS(s[i], d, 24);
+    }
+  }
+  fieldMs = performance.now() - t0;
+  return { s, di };
+}
+function sampleArr(a, x, y) {
+  const fx = Math.min(Math.max(x / STEP, 0), Gw - 1.001), fy = Math.min(Math.max(y / STEP, 0), Gh - 1.001);
+  const ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy, i = iy * Gw + ix;
+  return (a[i] * (1 - tx) + a[i + 1] * tx) * (1 - ty) + (a[i + Gw] * (1 - tx) + a[i + Gw + 1] * tx) * ty;
+}
+// Water depth 0 (reef flat) .. 1 (deep), same curve as depthOf() in the shaders
+const depthOf = s => 0.3 * sstep(-5, 20, s) + 0.7 * sstep(12, 60 + 0.35 * P.sigma, s);
+
+/* ======================================================================
+   Shaders
+   ====================================================================== */
+const VS = `#version 300 es
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const COMMON = `
+float hash2(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float ss(float a, float b, float x) { float t = clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
+float sdSeg(vec2 p, vec2 a, vec2 b, float ra, float rb) {
+  vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+  return length(pa - ba * h) - mix(ra, rb, h);
+}
+`;
+
+// ---------- Static bed: sand, seagrass, coral, depth tint. Rendered once per field change. ----------
+const BED_FS = `#version 300 es
+precision highp float;
+uniform sampler2D uNoise, uFA, uFB;
+uniform vec2 uRes, uGrid;
+uniform float uScale, uSeed, uStep, uMix, uSigma;
+out vec4 o;
+${COMMON}
+// ---- palette ----
+const vec3 SAND_A = vec3(0.80, 0.67, 0.48), SAND_B = vec3(0.70, 0.57, 0.40), SAND_D = vec3(0.50, 0.47, 0.38);
+const vec3 W_SHALLOW = vec3(0.24, 0.66, 0.72), W_MID = vec3(0.04, 0.50, 0.60), W_DEEP = vec3(0.025, 0.29, 0.42);
+const vec3 GRASS_A = vec3(0.24, 0.42, 0.22), GRASS_B = vec3(0.50, 0.64, 0.30);
+const vec3 PINK = vec3(0.95, 0.50, 0.47), ORANGE = vec3(0.97, 0.60, 0.27), VIOLET = vec3(0.62, 0.45, 0.80);
+const vec3 OCHRE = vec3(0.84, 0.67, 0.30), ROSE = vec3(0.88, 0.36, 0.44), OLIVE = vec3(0.62, 0.66, 0.36);
+const vec3 TAN = vec3(0.88, 0.62, 0.50), LILAC = vec3(0.80, 0.64, 0.90), MINT = vec3(0.48, 0.76, 0.64);
+const vec3 LDIR = vec3(-0.45, -0.58, 0.68);               // sun at the top left (screen y points down)
+const vec2 SH_DIR = vec2(0.6, 0.8);                       // shadows fall to the bottom right
+const float CURRENT = 0.65;                               // seagrass leans with a gentle current (radians)
+
+vec4 N(vec2 p, float scale) { return texture(uNoise, p / scale + uSeed * 0.013); }
+vec2 field(vec2 p) {
+  vec2 uv = (p / uStep + 0.5) / uGrid;
+  return mix(texture(uFA, uv).rg, texture(uFB, uv).rg, uMix);
+}
+float depthOf(float s) { return 0.3 * ss(-5.0, 20.0, s) + 0.7 * ss(12.0, 60.0 + 0.35 * uSigma, s); }
+vec3 pick3(vec3 a, vec3 b, vec3 c, float h) { return h < 0.34 ? a : (h < 0.67 ? b : c); }
+float lit(vec3 n) { return max(dot(normalize(n), normalize(LDIR)), 0.0); }
+
+// One coral colony in its local (rotated) frame. Returns colour + coverage; hg = height (for overlap order).
+vec4 coralAt(vec2 q, float r, float t, float h, float hc, out float hg) {
+  float rr = length(q), a = atan(q.y, q.x);
+  vec3 col = vec3(0.0); float al = 0.0; hg = 0.0;
+  if (t < 0.5) {
+    // brain coral: a dome covered in meandering grooves
+    float R = r * (1.0 + 0.07 * sin(a * 3.0 + h * 40.0) + 0.04 * sin(a * 7.0 + h * 13.0));
+    al = ss(R + 0.7, R - 0.7, rr);
+    float z = sqrt(max(1.0 - rr * rr / (R * R), 0.0)); hg = (0.5 + 0.5 * z) * r;
+    vec3 base = pick3(OCHRE, TAN, OLIVE, hc * 1.25);
+    float m = texture(uNoise, q / 46.0 + h * 7.3).r + texture(uNoise, q / 17.0 + h * 3.1).g * 0.3;
+    float g = abs(fract(m * 6.5) - 0.5);
+    float dif = lit(vec3(q / R * 1.1, z + 0.2));
+    col = base * (0.52 + 0.62 * dif);
+    col *= 1.0 - 0.40 * ss(0.16, 0.05, g);
+    col += 0.08 * ss(0.36, 0.5, g) * dif;
+    col *= mix(0.78, 1.0, ss(R, R * 0.7, rr));
+  } else if (t < 1.5) {
+    // branching (staghorn) coral seen from above: a rosette of forking branches with pale growing tips
+    float m = 5.0 + floor(h * 4.0), seg = 6.2832 / m;
+    float a2 = a + 0.22 * sin(rr * 0.28 + h * 20.0);
+    float loc = mod(a2 + h * 3.0, seg) - 0.5 * seg;
+    float fork = seg * 0.23 * ss(0.36 * r, 0.95 * r, rr);
+    float d = rr * sin(min(abs(abs(loc) - fork), 1.5));
+    float w = r * (0.12 - 0.05 * rr / r) + 0.75;
+    float br = ss(w + 0.7, w - 0.7, d);
+    float hub = ss(r * 0.26 + 0.8, r * 0.26 - 0.8, rr);
+    al = max(br, hub) * ss(r + 0.5, r - 1.5, rr);
+    float x = clamp(d / w, 0.0, 1.0);
+    hg = (0.45 + 0.55 * (1.0 - rr / r)) * r;
+    vec3 base = pick3(PINK, VIOLET, ORANGE, hc);
+    vec3 tip = mix(base, vec3(1.0, 0.94, 0.86), 0.5);
+    col = mix(base * 0.70, tip, ss(0.55 * r, 0.97 * r, rr));
+    col *= 0.74 + 0.36 * (1.0 - x * x);
+    col *= 0.92 + 0.10 * hash2(floor(q * 1.3) + h * 50.0);
+  } else if (t < 2.5) {
+    // sea fan: a lacy fan of ribs and cross-links leaning with the current, sand shows through the holes
+    vec2 q2 = q + vec2(0.7 * r, 0.0);
+    float r2 = length(q2), a2 = atan(q2.y, q2.x);
+    float F = 1.5 * r, span = 0.55 + 0.2 * h;
+    float edge = F * (0.92 + 0.08 * sin(a2 * 9.0 + h * 30.0));
+    float mask = ss(edge, edge - 1.5, r2) * ss(span, span - 0.12, abs(a2)) * ss(0.0, 2.0, r2);
+    float nr = 9.0 + floor(h * 6.0);
+    float rib = r2 * abs(sin((a2 + 0.04 * sin(r2 * 0.5)) * nr));
+    float ribs = ss(0.9, 0.3, rib) * ss(F * 0.15, F * 0.3, r2);
+    float arc = abs(fract(r2 / 3.4 + texture(uNoise, q / 30.0 + h).r * 1.5) - 0.5) * 3.4;
+    float net = max(ss(0.75, 0.25, arc), ribs);
+    float trunk = ss(1.3, 0.5, abs(q2.y) - 0.0) * ss(F * 0.35, F * 0.1, r2);
+    al = mask * max(max(net * 0.95, 0.18), trunk);
+    hg = r * 1.1;
+    vec3 base = pick3(VIOLET, ROSE, ORANGE, hc);
+    col = mix(base * 0.75, mix(base, vec3(1.0), 0.25), ss(0.3 * F, F, r2));
+  } else {
+    // sponge / boulder coral: a lumpy dome dotted with polyps
+    vec2 dir = q / max(rr, 1.0);
+    float R = r * (0.80 + 0.32 * texture(uNoise, dir * 0.07 + h * 5.0).r);
+    al = ss(R + 0.7, R - 0.7, rr);
+    float z = sqrt(max(1.0 - rr * rr / (R * R), 0.0)); hg = (0.4 + 0.5 * z) * r;
+    vec3 base = hc < 0.85 ? pick3(ORANGE, LILAC, VIOLET, hc / 0.85) : MINT;
+    float dif = lit(vec3(q / R, z + 0.25));
+    col = base * (0.55 + 0.55 * dif);
+    vec2 g = fract(q / 3.6 + h * 9.0) - 0.5;
+    float pd = length(g + 0.12 * (vec2(hash2(floor(q / 3.6) + h), hash2(floor(q / 3.6) + h + 3.0)) - 0.5));
+    col *= 1.0 - 0.32 * ss(0.26, 0.14, pd);
+    col += 0.06 * ss(0.30, 0.38, pd) * ss(0.48, 0.38, pd);
+    col *= mix(0.8, 1.0, ss(R, R * 0.7, rr));
+  }
+  return vec4(col, al);
+}
+
+// Big colonies, one per 30px cell, clustered along the reef-patch edge
+void coralLayer(vec2 p, inout vec3 col, inout float cover) {
+  const float C = 24.0;
+  vec2 c0 = floor(p / C);
+  float shd = 0.0, bestH = -1.0; vec4 best = vec4(0.0);
+  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+    vec2 cell = c0 + vec2(float(i), float(j));
+    float h0 = hash2(cell + 0.37), h1 = hash2(cell + 3.71), h2 = hash2(cell + 9.13), h3 = hash2(cell + 5.29);
+    vec2 c = (cell + 0.15 + 0.7 * vec2(h0, h1)) * C;
+    vec2 f = field(c);
+    float s = f.x, di = f.y;
+    float bom = ss(140.0, 220.0, di);                     // open-water bommies (far from any icon): solid coral heads
+    float band = mix(ss(-64.0, -40.0, s), 1.0, bom) * ss(18.0, 0.0, s);
+    float clump = mix(ss(0.25, 0.55, N(c, 260.0).r), 1.0, bom);
+    if (h2 > band * (0.25 + 0.75 * clump)) continue;
+    float r = mix(8.0, 16.0, h3) * (0.6 + 0.4 * band);
+    r = min(r, di - 7.0);
+    if (r < 3.5) continue;
+    vec2 d = p - c;
+    vec2 ds = d - SH_DIR * (2.0 + r * 0.35);
+    shd = max(shd, ss(r + 4.0, r - 4.0, length(ds)));
+    if (dot(d, d) > r * r * 1.35) continue;
+    float ang = h0 * 6.2832;
+    float ty = floor(hash2(cell + 7.77) * 4.0);
+    // fans are planar: always orient them across the current
+    if (ty > 1.5 && ty < 2.5) ang = CURRENT + 1.57 + (h0 - 0.5) * 0.8;
+    vec2 q = vec2(cos(ang) * d.x + sin(ang) * d.y, -sin(ang) * d.x + cos(ang) * d.y);
+    float hg;
+    vec4 cc = coralAt(q, r, ty, h3 * 0.7 + h0 * 0.3, hash2(cell + 2.22), hg);
+    if (cc.a > 0.02 && hg > bestH) { best = cc; bestH = hg; }
+  }
+  col *= 1.0 - 0.32 * shd;
+  col = mix(col, best.rgb, best.a);
+  cover = max(cover, best.a);
+}
+
+// Small things, one per 13px cell: little coral heads and urchins near the reef, starfish and shells on the sand
+void smallLayer(vec2 p, inout vec3 col, inout float cover) {
+  const float C = 13.0;
+  vec2 c0 = floor(p / C);
+  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+    vec2 cell = c0 + vec2(float(i), float(j));
+    float h0 = hash2(cell + 11.3), h1 = hash2(cell + 13.7), h2 = hash2(cell + 17.9), h3 = hash2(cell + 19.1), h4 = hash2(cell + 23.3);
+    vec2 c = (cell + 0.15 + 0.7 * vec2(h0, h1)) * C;
+    vec2 f = field(c);
+    float s = f.x, di = f.y;
+    float band = ss(-60.0, -42.0, s) * ss(30.0, 6.0, s) * ss(0.3, 0.6, N(c + 77.0, 220.0).g);
+    float sand = ss(-28.0, -46.0, s);
+    vec2 d = p - c;
+    float rr = length(d);
+    if (h2 < band * 0.22) {
+      if (di < 9.0) continue;
+      if (h3 < 0.72) {
+        // little coral head
+        float r = 2.6 + 3.0 * h4;
+        col *= 1.0 - 0.25 * ss(r + 2.5, r - 2.0, length(d - SH_DIR * 2.0));
+        float al = ss(r + 0.6, r - 0.6, rr);
+        float z = sqrt(max(1.0 - rr * rr / (r * r), 0.0));
+        vec3 base = h4 < 0.33 ? PINK : (h4 < 0.66 ? LILAC : ORANGE);
+        vec3 cc = base * (0.55 + 0.6 * lit(vec3(d / r, z + 0.2)));
+        col = mix(col, cc, al); cover = max(cover, al);
+      } else {
+        // sea urchin: dark core with a halo of thin spines
+        float a = atan(d.y, d.x);
+        float sp = rr * abs(sin(a * 9.0 + h4 * 6.0));
+        float spines = ss(0.7, 0.2, sp) * ss(6.5, 3.0, rr) * 0.75;
+        float core = ss(2.6, 2.0, rr);
+        col *= 1.0 - 0.25 * ss(5.0, 1.5, length(d - SH_DIR * 2.5));
+        vec3 uc = vec3(0.14, 0.08, 0.17);
+        col = mix(col, uc, max(spines, core));
+        col += vec3(0.25, 0.2, 0.3) * ss(1.0, 0.0, length(d + vec2(0.7, 0.8))) * core;
+        cover = max(cover, core);
+      }
+    } else if (h2 > 1.0 - sand * 0.05 * ss(14.0, 20.0, di) + 0.0 && h3 < 0.38) {
+      // starfish on the sand (never under an icon)
+      float R = 4.5 + 3.0 * h4;
+      if (di < R + 3.0) continue;
+      float a = atan(d.y, d.x) + h0 * 6.2832;
+      float rad = R * (0.32 + 0.68 * pow(0.5 + 0.5 * cos(5.0 * a), 1.6));
+      float al = ss(rad + 0.6, rad - 0.6, rr);
+      vec3 base = h1 < 0.45 ? vec3(0.88, 0.40, 0.22) : (h1 < 0.75 ? vec3(0.25, 0.42, 0.82) : vec3(0.86, 0.72, 0.48));
+      vec3 sc = base * (0.80 + 0.30 * ss(rad, 0.0, rr));
+      sc *= 1.0 - 0.15 * step(0.6, hash2(floor(d * 1.2) + h3));
+      col *= 1.0 - 0.18 * ss(rad + 2.0, rad - 2.0, length(d - SH_DIR * 1.5));
+      col = mix(col, sc, al); cover = max(cover, al);
+    } else if (h2 > 1.0 - sand * 0.14 && di > 6.0) {
+      // shell / pebble
+      float r = 1.3 + 1.4 * h4;
+      vec2 e = vec2(d.x, d.y * 1.4);
+      float al = ss(r + 0.5, r - 0.5, length(e)) * 0.85;
+      vec3 sc = mix(vec3(0.95, 0.89, 0.80), vec3(0.62, 0.55, 0.48), h3);
+      col *= 1.0 - 0.2 * ss(r + 1.5, r - 1.0, length(e - SH_DIR * 1.0));
+      col = mix(col, sc, al);
+    }
+  }
+}
+
+// Seagrass tufts, one per 15px cell: blades streaming with the current
+void grassLayer(vec2 p, inout vec3 col) {
+  const float C = 15.0;
+  vec2 c0 = floor(p / C);
+  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+    vec2 cell = c0 + vec2(float(i), float(j));
+    float h0 = hash2(cell + 31.1), h1 = hash2(cell + 37.3), h2 = hash2(cell + 41.7);
+    vec2 c = (cell + 0.15 + 0.7 * vec2(h0, h1)) * C;
+    vec2 f = field(c);
+    float s = f.x, di = f.y;
+    float meadow = ss(6.0, 20.0, s) * ss(95.0, 45.0, s) * ss(0.42, 0.62, N(c, 260.0).g);
+    float lagoon = ss(-30.0, -48.0, s) * ss(10.0, 18.0, di) * 0.5 * ss(0.58, 0.75, N(c + 40.0, 200.0).b);
+    if (h2 > max(meadow * 0.9, lagoon)) continue;
+    float baseAng = CURRENT + (N(c, 500.0).r - 0.5) * 1.2;
+    for (int b = 0; b < 5; b++) {
+      float fb = float(b);
+      float hb = hash2(cell + fb * 3.3 + 11.0), hl = hash2(cell + fb * 5.1 + 2.0);
+      float ang = baseAng + (hb - 0.5) * 2.0;
+      float L = 6.0 + 7.0 * hl;
+      vec2 dir = vec2(cos(ang), sin(ang)), nrm = vec2(-dir.y, dir.x);
+      vec2 a0 = c + nrm * (hb - 0.5) * 3.0;
+      vec2 m = a0 + dir * L * 0.5 + nrm * L * 0.10 * (hl - 0.5);
+      vec2 e = a0 + dir * L + nrm * L * 0.45 * (hb - 0.5);
+      float d1 = sdSeg(p, a0, m, 1.05, 0.8), d2 = sdSeg(p, m, e, 0.8, 0.25);
+      float d = min(d1, d2);
+      if (d > 2.5) continue;
+      float u = d1 < d2 ? 0.25 : 0.75;
+      // soft shadow just beside the blade
+      float ds = min(sdSeg(p - SH_DIR * 1.6, a0, m, 1.3, 1.0), sdSeg(p - SH_DIR * 1.6, m, e, 1.0, 0.4));
+      col *= 1.0 - 0.16 * ss(1.2, -0.6, ds);
+      vec3 gc = mix(GRASS_A, GRASS_B, u * (0.6 + 0.4 * hl)) * (0.88 + 0.24 * hb);
+      col = mix(col, gc, ss(0.6, -0.4, d) * 0.92);
+    }
+  }
+}
+
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, uRes.y * uScale - gl_FragCoord.y) / uScale;
+  vec2 f = field(p);
+  float s = f.x;
+  float sN = s + (N(p, 180.0).r - 0.5) * 16.0;              // break up the contours a little
+  float dep = depthOf(sN);
+
+  // ---------- sand: warm mid-tone patches, current ripples, fine grain ----------
+  float b1 = N(p, 520.0).b, b2 = N(p + 211.0, 140.0).g;
+  vec3 sand = mix(SAND_B, SAND_A, ss(0.25, 0.8, b1 * 0.7 + b2 * 0.3));
+  float ra = (N(p, 900.0).r - 0.5) * 1.6 + CURRENT + 1.57;
+  vec2 rd = vec2(cos(ra), sin(ra));
+  float rip = sin(dot(p, rd) * 0.42 + N(p, 70.0).g * 8.0);
+  sand *= 1.0 + 0.05 * rip * ss(0.5, 0.0, N(p + 90.0, 300.0).a + 0.0) ;
+  sand *= 1.0 + (hash2(floor(p * max(uScale, 1.0) * 0.9)) - 0.5) * 0.06;
+  // deeper bottom: darker sand with rubble and algae patches
+  vec3 col = mix(sand, SAND_D * (0.8 + 0.4 * N(p, 120.0).r), ss(0.12, 0.6, dep));
+  float rocks = ss(0.56, 0.74, N(p + 500.0, 160.0).r) * ss(0.25, 0.75, dep);
+  col = mix(col, vec3(0.20, 0.30, 0.28), rocks * 0.7);
+  col *= 1.0 - 0.25 * ss(0.4, 1.0, dep) * ss(0.35, 0.7, N(p + 333.0, 600.0).g);   // deep seagrass beds / rubble fields far below
+
+  float cover = 0.0;
+  // each layer only where its band can reach (cell centres are at most ~35px away from p)
+  if (s < 125.0) grassLayer(p, col);
+  if (s < 60.0) smallLayer(p, col, cover);
+  if (s > -105.0 && s < 50.0) coralLayer(p, col, cover);
+
+  // ---------- water: tint by depth; corals reach up toward the surface so they are tinted less ----------
+  vec3 wcol = mix(W_SHALLOW, W_MID, ss(0.0, 0.45, dep));
+  wcol = mix(wcol, W_DEEP, ss(0.4, 1.0, dep));
+  wcol *= 0.92 + 0.16 * N(p, 700.0).r;
+  float absb = mix(0.10, 0.90, pow(dep, 0.8)) * (1.0 - 0.45 * cover);
+  col = mix(col, wcol, absb);
+  // drop-off just outside the reef edge reads a little darker
+  col *= 1.0 - 0.14 * ss(0.0, 30.0, sN) * ss(120.0, 40.0, sN);
+  o = vec4(col, dep);
+}`;
+
+// ---------- Per-frame water: refraction shimmer, caustics and slow sunlight patches over the cached bed ----------
+const WATER_FS = `#version 300 es
+precision highp float;
+uniform sampler2D uBed, uNoise, uCaust;
+uniform vec2 uRes;
+uniform float uScale, uSeed, uTime, uCaustK;
+out vec4 o;
+${COMMON}
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, uRes.y * uScale - gl_FragCoord.y) / uScale;
+  float t = uTime;
+  vec2 so = vec2(uSeed * 0.013);
+  vec4 n = texture(uNoise, p / 300.0 + vec2(t * 0.011, t * 0.007) + so);
+  vec2 off = (n.rg - 0.5) * 3.4;
+  vec4 bed = texture(uBed, (gl_FragCoord.xy + vec2(off.x, -off.y) * uScale) / (uRes * uScale));
+  vec3 col = bed.rgb;
+  float dep = bed.a;
+  // caustics: two warped Voronoi line networks drifting in different directions
+  vec4 n2 = texture(uNoise, p / 520.0 - vec2(t * 0.006, t * 0.009) + so + 0.31);
+  vec2 q = p + (n.ba - 0.5) * 70.0 + (n2.rg - 0.5) * 50.0;
+  float c1 = texture(uCaust, q / 230.0 + vec2(t * 0.012, t * 0.007)).r;
+  float c2 = texture(uCaust, q / 180.0 + vec2(-t * 0.008, t * 0.012) + 0.43).r;
+  float c = pow(c1 * c2, 0.85) * 1.15 + 0.12 * (c1 + c2);
+  c *= 0.6 + 0.8 * ss(0.3, 0.75, n2.b);                     // brighter and dimmer stretches
+  float k = uCaustK * mix(0.30, 0.04, ss(0.0, 0.9, dep));
+  col += c * k * vec3(0.95, 1.0, 0.88);
+  // slow sunlight patches from long swells
+  col *= 0.95 + 0.10 * texture(uNoise, p / 1100.0 + vec2(t * 0.004, -t * 0.003) + so).g;
+  // gentle vignette
+  vec2 v = gl_FragCoord.xy / (uRes * uScale) - 0.5;
+  col *= 1.0 - 0.22 * dot(v, v);
+  o = vec4(col, 1.0);
+}`;
+
+// ---------- Sprites (fish and turtle): one instanced quad each ----------
+const SPRITE_VS = `#version 300 es
+layout(location = 0) in vec4 aA;     // x, y, cos, sin (heading)
+layout(location = 1) in vec4 aB;     // length px, width ratio, swim phase, species
+layout(location = 2) in vec4 aC;     // shadow dx, dy, alpha, water depth below
+uniform vec2 uRes, uHalf;
+uniform float uShadow;
+out vec2 vL;
+flat out vec4 vB;
+flat out vec4 vC;
+const vec2 Q[6] = vec2[6](vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(1.0, 1.0), vec2(-1.0, -1.0), vec2(1.0, 1.0), vec2(-1.0, 1.0));
+void main() {
+  vec2 c = Q[gl_VertexID];
+  float L = aB.x;
+  vec2 lp = c * uHalf * L + c * uShadow * (2.0 + 5.0 * aC.w);
+  vL = lp / L;
+  vec2 d = aA.zw;
+  vec2 w = aA.xy + vec2(lp.x * d.x - lp.y * d.y, lp.x * d.y + lp.y * d.x) + uShadow * aC.xy;
+  vB = aB; vC = aC;
+  gl_Position = vec4(w.x / uRes.x * 2.0 - 1.0, 1.0 - w.y / uRes.y * 2.0, 0.0, 1.0);
+}`;
+
+const FISH_FS = `#version 300 es
+precision highp float;
+in vec2 vL;
+flat in vec4 vB;
+flat in vec4 vC;
+uniform float uShadow;
+uniform vec3 uTint;
+out vec4 o;
+${COMMON}
+void main() {
+  float L = vB.x, u = vL.x, v = vL.y;
+  float sw = 0.075 * sin(vB.z - u * 6.5) * ss(0.30, -0.55, u);   // body wave, stronger toward the tail
+  float y = v - sw;
+  float bw = vB.y * 0.5;
+  float k = u - 0.10;
+  float prof = k > 0.0 ? 1.0 - (k / 0.40) * (k / 0.40) : 1.0 - pow(-k / 0.42, 1.5);
+  float hw = bw * sqrt(max(prof, 0.0));
+  float dB = (abs(y) - hw) * L;
+  float tt = clamp((-0.28 - u) / 0.26, 0.0, 1.0);
+  float spread = mix(0.03, 0.19, tt), notch = 0.11 * ss(0.5, 1.0, tt);
+  float dT = max(max(abs(y) - spread, notch - abs(y)), abs(u + 0.42) - 0.13) * L;
+  float d = min(dB, dT);
+  vec2 fq = vec2((u - 0.12) / 0.09, (abs(y) - bw * 0.95) / 0.045);
+  float dF = (length(fq) - 1.0) * 0.045 * L;
+  if (uShadow > 0.5) {
+    float bl = 0.9 + 3.0 * vC.w;
+    float a = ss(bl, -bl, min(d, dF + 0.6)) * (0.30 - 0.12 * vC.w) * vC.z;
+    o = vec4(vec3(0.0, 0.03, 0.07) * a, a);
+    return;
+  }
+  float sp = vB.w;
+  vec3 back, side;
+  if (sp < 0.5)      { back = vec3(0.13, 0.42, 0.74); side = vec3(0.42, 0.80, 0.96); }   // blue chromis
+  else if (sp < 1.5) { back = vec3(0.95, 0.72, 0.10); side = vec3(1.00, 0.89, 0.36); }   // yellow tang
+  else if (sp < 2.5) { back = vec3(0.30, 0.42, 0.52); side = vec3(0.82, 0.89, 0.93); }   // silver jack
+  else if (sp < 3.5) { back = vec3(0.60, 0.65, 0.40); side = vec3(0.94, 0.93, 0.66); }   // sergeant major
+  else               { back = vec3(0.94, 0.42, 0.28); side = vec3(1.00, 0.70, 0.50); }   // orange anthias
+  float yn = clamp(abs(y) / max(hw, 1e-3), 0.0, 1.0);
+  vec3 col = mix(back, side, ss(0.15, 0.95, yn));
+  if (sp > 2.5 && sp < 3.5) col *= 1.0 - 0.55 * ss(0.28, 0.14, abs(fract(u * 5.0 + 0.1) - 0.5)) * step(-0.26, u) * step(u, 0.30);
+  float isTail = step(dT, dB);
+  col = mix(col, mix(back, side, 0.55), isTail);
+  col += 0.12 * ss(0.6, 0.0, abs(y / max(hw, 1e-3) + 0.25)) * step(0.0, prof) * (1.0 - isTail);
+  vec2 e = vec2((u - 0.33) * L, (abs(y) - hw * 0.6) * L);
+  col = mix(col, vec3(0.08), 0.75 * ss(0.8, 0.3, length(e)) * ss(15.0, 19.0, L));
+  col = mix(col, uTint, 0.12 + 0.18 * vC.w);
+  float a = ss(0.55, -0.55, d) * mix(1.0, 0.85, isTail);
+  float af = ss(0.5, -0.5, dF) * 0.5 * (1.0 - a);
+  vec3 fc = mix(side, uTint, 0.3);
+  o = vec4(col * a + fc * af, a + af) * vC.z;
+}`;
+
+const TURTLE_FS = `#version 300 es
+precision highp float;
+in vec2 vL;
+flat in vec4 vB;
+flat in vec4 vC;
+uniform float uShadow;
+uniform vec3 uTint;
+out vec4 o;
+${COMMON}
+float sdEll(vec2 p, vec2 r) { return (length(p / r) - 1.0) * min(r.x, r.y); }
+const vec2 SD[13] = vec2[13](vec2(0.62, 0.0), vec2(0.28, 0.0), vec2(-0.06, 0.0), vec2(-0.40, 0.0), vec2(-0.72, 0.0),
+  vec2(0.42, 0.56), vec2(0.08, 0.64), vec2(-0.26, 0.62), vec2(-0.56, 0.48),
+  vec2(0.42, -0.56), vec2(0.08, -0.64), vec2(-0.26, -0.62), vec2(-0.56, -0.48));
+void main() {
+  float L = vB.x, ph = vB.z;
+  vec2 q = vL, a = vec2(q.x, abs(q.y));
+  float st = 0.5 + 0.5 * sin(ph);                         // flipper stroke: 0 tucked back, 1 spread forward
+  // shell, slightly narrower toward the back
+  vec2 sc = q - vec2(-0.03, 0.0);
+  float tap = 1.0 - 0.16 * ss(0.0, -0.3, sc.x);
+  float dS = sdEll(vec2(sc.x, sc.y / tap), vec2(0.30, 0.235));
+  // head and neck
+  float hs = 0.02 * sin(ph * 0.5 + 0.7);
+  float dH = min(sdEll(q - vec2(0.385, hs), vec2(0.095, 0.072)), sdSeg(q, vec2(0.22, 0.0), vec2(0.35, hs * 0.7), 0.06, 0.055));
+  // long front flippers sweep between spread forward (power stroke) and tucked along the shell (glide)
+  float fa = 0.95 + 1.15 * (1.0 - st);
+  vec2 sh = vec2(0.14, 0.16);
+  vec2 mid = sh + vec2(cos(fa), sin(fa)) * 0.19;
+  vec2 tip = mid + vec2(cos(fa + 0.5), sin(fa + 0.5)) * 0.24;
+  float dF = min(sdSeg(a, sh, mid, 0.058, 0.046), sdSeg(a, mid, tip, 0.046, 0.012));
+  float ra = 2.35 + 0.25 * sin(ph + 1.2);
+  vec2 rs = vec2(-0.22, 0.12);
+  float dR = sdSeg(a, rs, rs + vec2(cos(ra), sin(ra)) * 0.13, 0.045, 0.018);
+  float dTl = sdSeg(q, vec2(-0.30, 0.0), vec2(-0.38, 0.0), 0.025, 0.004);
+  float dSkin = min(min(dH, dF), min(dR, dTl));
+  float d = min(dS, dSkin) * L;
+  if (uShadow > 0.5) {
+    float bl = 1.2 + 4.0 * vC.w;
+    float al = ss(bl, -bl, d) * (0.34 - 0.14 * vC.w) * vC.z;
+    o = vec4(vec3(0.0, 0.03, 0.07) * al, al);
+    return;
+  }
+  // skin: grey-olive with pale scale borders and paler flipper edges
+  vec3 skin = vec3(0.42, 0.45, 0.34);
+  vec2 g = fract(q * L / 3.4) - 0.5;
+  skin *= 0.90 + 0.12 * ss(0.48, 0.30, length(g));
+  skin = mix(skin, vec3(0.80, 0.78, 0.64), ss(-0.018, 0.0, dSkin) * 0.55);
+  skin *= 0.85 + 0.25 * ss(0.0, -0.05, q.x - 0.3) * step(0.25, q.x);
+  // shell: amber scutes with radiating streaks, pale borders, a ring of marginal scutes, dome shading
+  vec2 n = vec2(sc.x / 0.30, sc.y / (0.235 * tap));
+  float f1 = 9.0, f2 = 9.0; vec2 cc = vec2(0.0);
+  for (int i = 0; i < 13; i++) {
+    float dd = length(n - SD[i]);
+    if (dd < f1) { f2 = f1; f1 = dd; cc = SD[i]; } else if (dd < f2) f2 = dd;
+  }
+  float rim = length(n);
+  vec2 dv = n - cc;
+  float streak = 0.5 + 0.5 * sin(atan(dv.y, dv.x) * 7.0 + f1 * 6.0);
+  vec3 shell = mix(vec3(0.62, 0.45, 0.20), vec3(0.30, 0.21, 0.11), ss(0.05, 0.42, f1));
+  shell *= 0.86 + 0.18 * streak;
+  float border = ss(0.07, 0.02, f2 - f1) * step(rim, 0.82);
+  float ma = abs(fract(atan(n.y, n.x) / 6.2832 * 24.0) - 0.5);
+  float marg = ss(0.80, 0.84, rim);
+  border = max(border, ss(0.035, 0.0, abs(rim - 0.82)));
+  border = max(border, marg * ss(0.08, 0.02, ma));
+  shell = mix(shell, vec3(0.42, 0.33, 0.20), marg * 0.6);
+  shell = mix(shell, vec3(0.82, 0.74, 0.55), border * 0.75);
+  float z = sqrt(max(1.0 - rim * rim, 0.0));
+  vec3 nn = normalize(vec3(n * 0.75, z + 0.3));
+  shell *= 0.62 + 0.55 * max(dot(nn, normalize(vec3(-0.45, -0.58, 0.68))), 0.0);
+  vec3 col = mix(skin, shell, ss(0.6, -0.6, dS * L));
+  col = mix(col, uTint, 0.12 + 0.12 * vC.w);
+  float al = ss(0.6, -0.6, d);
+  o = vec4(col * al, al) * vC.z;
+}`;
+
+/* ======================================================================
+   WebGL
+   ====================================================================== */
+const cv = document.getElementById('art');
+const gl = cv.getContext('webgl2', { antialias: false });
+if (!gl) document.getElementById('nogl').style.display = 'grid';
+function program(fs, vs = VS) {
+  const mk = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); throw new Error('shader'); }
+    return s;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, mk(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) console.error(gl.getProgramInfoLog(p));
+  const U = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i).name.replace(/\[0\]$/, ''); U[nm] = gl.getUniformLocation(p, nm); }
+  return { p, U };
+}
+const BED = program(BED_FS), WATER = program(WATER_FS);
+const FISH = program(FISH_FS, SPRITE_VS), TURTLE = program(TURTLE_FS, SPRITE_VS);
+const emptyVAO = gl.createVertexArray();
+gl.bindVertexArray(emptyVAO);
+
+function makeTex(w, h, ifmt, fmt, type, data, filter, wrap) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage2D(gl.TEXTURE_2D, 0, ifmt, w, h, 0, fmt, type, data);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
+  return t;
+}
+let noiseTex = null, caustTex = null;
+function buildNoiseTex() {
+  const { S, d } = makeNoiseImage();
+  noiseTex = makeTex(S, S, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, d, gl.LINEAR_MIPMAP_LINEAR, gl.REPEAT);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  const c = makeCausticImage();
+  caustTex = makeTex(c.S, c.S, gl.R8, gl.RED, gl.UNSIGNED_BYTE, c.d, gl.LINEAR_MIPMAP_LINEAR, gl.REPEAT);
+  gl.generateMipmap(gl.TEXTURE_2D);
+}
+const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+function toHalf(v) {
+  f32[0] = v; const x = u32[0];
+  const sign = (x >>> 16) & 0x8000, e = ((x >>> 23) & 0xff) - 112, m = x & 0x7fffff;
+  if (e <= 0) return sign;
+  if (e >= 31) return sign | 0x7c00;
+  return sign | (e << 10) | (m >>> 13);
+}
+// Two field textures: the scene morphs from one to the other
+const ftex = [null, null];
+let fromI = 0, toI = 0, morphT0 = -1e9, morphDur = MORPH_MS, FA = null, FB = null;
+function allocField() {
+  for (let i = 0; i < 2; i++) {
+    if (ftex[i]) gl.deleteTexture(ftex[i]);
+    ftex[i] = makeTex(Gw, Gh, gl.RG16F, gl.RG, gl.HALF_FLOAT, null, gl.LINEAR, gl.CLAMP_TO_EDGE);
+  }
+}
+function uploadField(i, Fd) {
+  const d = new Uint16Array(Gw * Gh * 2);
+  for (let k = 0; k < Gw * Gh; k++) { d[2 * k] = toHalf(Fd.s[k]); d[2 * k + 1] = toHalf(Fd.di[k]); }
+  gl.bindTexture(gl.TEXTURE_2D, ftex[i]);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Gw, Gh, gl.RG, gl.HALF_FLOAT, d);
+  cacheOK = false;
+}
+
+// The static bed lives in its own texture at canvas resolution; it is re-rendered only when the field changes.
+// While the reef morphs (icons moved) it is re-rendered every frame into a half-resolution copy instead,
+// then once more at full resolution when the morph ends.
+const beds = [{ tex: null, fb: null, w: 0, h: 0, k: 1 }, { tex: null, fb: null, w: 0, h: 0, k: 0.5 }];
+let bedMix = -1, bedMs = 0, bedCur = beds[0];
+let cacheOK = false;        // share.js clears this when it redraws at another size
+function ensureBed() {
+  for (const b of beds) {
+    const w = Math.max(1, Math.round(cv.width * b.k)), h = Math.max(1, Math.round(cv.height * b.k));
+    if (b.tex && b.w === w && b.h === h) continue;
+    if (b.tex) gl.deleteTexture(b.tex);
+    if (!b.fb) b.fb = gl.createFramebuffer();
+    b.w = w; b.h = h;
+    b.tex = makeTex(w, h, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, null, gl.LINEAR, gl.CLAMP_TO_EDGE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, b.fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, b.tex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (b.k === 1) cacheOK = false;
+  }
+}
+function renderBed(lo) {
+  const t0 = performance.now(), b = beds[lo ? 1 : 0];
+  const { p, U } = BED;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, b.fb);
+  gl.useProgram(p);
+  gl.viewport(0, 0, b.w, b.h);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, noiseTex);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, ftex[fromI]);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, ftex[toI]);
+  gl.uniform1i(U.uNoise, 0); gl.uniform1i(U.uFA, 1); gl.uniform1i(U.uFB, 2);
+  gl.uniform2f(U.uRes, cv.width / cv._scale, cv.height / cv._scale);
+  gl.uniform2f(U.uGrid, Gw, Gh);
+  gl.uniform1f(U.uScale, cv._scale * b.h / cv.height);
+  gl.uniform1f(U.uSeed, (seed % 997) * 0.37);
+  gl.uniform1f(U.uStep, STEP);
+  gl.uniform1f(U.uMix, curMix);
+  gl.uniform1f(U.uSigma, P.sigma);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  bedMix = curMix; cacheOK = !lo; bedCur = b;
+  if (!lo) bedMs = performance.now() - t0;
+}
+
+const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2 - 4, hh: ic.h / 2 - 2, fw: ic.w / 2, fh: ic.h / 2 }));
+function commit(fromEmpty = false) {
+  const nf = computeField(P.adaptive ? iconRects() : []);
+  const target = 1 - toI;
+  if (fromEmpty) { FA = computeField([]); uploadField(toI, FA); }
+  else FA = FB;
+  FB = nf;
+  uploadField(target, FB);
+  fromI = toI; toI = target;
+  morphT0 = performance.now();
+  morphDur = fromEmpty ? 2600 : MORPH_MS;
+}
+function refresh() {
+  FA = FB = computeField(P.adaptive ? iconRects() : []);
+  uploadField(toI, FB);
+  fromI = toI; morphT0 = -1e9;
+}
+
+/* ======================================================================
+   The current field (blends between the old and new one while icons move)
+   ====================================================================== */
+let curMix = 1;
+const curS = (x, y) => FB ? sampleArr(FA.s, x, y) * (1 - curMix) + sampleArr(FB.s, x, y) * curMix : 999;
+function gradS(x, y) {
+  const e = 6, gx = curS(x + e, y) - curS(x - e, y), gy = curS(x, y + e) - curS(x, y - e);
+  const l = Math.hypot(gx, gy) || 1;
+  return [gx / l, gy / l];
+}
+
+/* ======================================================================
+   Fish schools: the leader wanders and steers around reef patches (field gradient),
+   every fish follows the leader's trail at its own delay and sideways offset, so the school flows around obstacles
+   ====================================================================== */
+const SPECIES = [
+  { n: [11, 16], len: [14, 17],   wid: 0.33, spd: 1.10, spread: 34 },   // blue chromis
+  { n: [5, 8],   len: [20, 24],   wid: 0.48, spd: 0.80, spread: 30 },   // yellow tang
+  { n: [13, 20], len: [17, 21],   wid: 0.28, spd: 1.25, spread: 40 },   // silver jacks
+  { n: [7, 10],  len: [17, 20],   wid: 0.42, spd: 0.95, spread: 32 },   // sergeant majors
+  { n: [8, 12],  len: [14, 17],   wid: 0.35, spd: 1.00, spread: 30 },   // orange anthias
+];
+const PSTEP = 3, CLEAR = 70;
+const schools = [];
+let simT = 0, waterT = 0, spawnWait = 0, nextSpecies = Math.floor(Math.random() * SPECIES.length);
+const rand = (a, b) => a + Math.random() * (b - a);
+// Spawning looks at the target field (where the reef is heading), not the half-morphed one
+const tgtS = (x, y) => FB ? sampleArr(FB.s, x, y) : 999;
+function findWater(onScreen) {
+  let best = null, bestS = -1e9;
+  for (let k = 0; k < 40; k++) {
+    let x, y, ang;
+    if (onScreen) { x = rand(60, W - 60); y = rand(60, H - TASKBAR - 40); ang = rand(0, 6.283); }
+    else {
+      const e = Math.floor(Math.random() * 4);
+      if (e === 0) { x = -40; y = rand(40, H - 80); ang = rand(-0.6, 0.6); }
+      else if (e === 1) { x = W + 40; y = rand(40, H - 80); ang = Math.PI + rand(-0.6, 0.6); }
+      else if (e === 2) { x = rand(40, W - 40); y = -40; ang = Math.PI / 2 + rand(-0.6, 0.6); }
+      else { x = rand(40, W - 40); y = H + 40; ang = -Math.PI / 2 + rand(-0.6, 0.6); }
+    }
+    const s = Math.min(tgtS(x + Math.cos(ang) * 60, y + Math.sin(ang) * 60), tgtS(x + Math.cos(ang) * 170, y + Math.sin(ang) * 170) + 20);
+    if (s > bestS) { bestS = s; best = { x, y, ang, s }; }
+    if (s > CLEAR + 30) break;
+  }
+  return best;
+}
+function makeSchool(onScreen) {
+  const sp = nextSpecies; nextSpecies = (nextSpecies + 1 + Math.floor(Math.random() * 2)) % SPECIES.length;
+  const S = SPECIES[sp], at = findWater(onScreen);
+  if (at.s < 15) return null;                                // no open water to swim in (desktop full of icons)
+  const n = Math.round(rand(S.n[0], S.n[1]));
+  const fish = [];
+  for (let i = 0; i < n; i++) {
+    const tri = (Math.random() + Math.random()) - 1;
+    fish.push({ d: 6 + Math.random() * S.spread * 2.8, l: tri * S.spread * 0.9, ph: Math.random() * 6.283,
+      len: rand(S.len[0], S.len[1]), sw: Math.random() * 6.283, x: at.x, y: at.y, c: 1, s: 0 });
+  }
+  const sc = { sp, x: at.x, y: at.y, ang: at.ang, base: at.ang, p1: Math.random() * 99, p2: Math.random() * 99,
+    path: [], fish, alpha: onScreen ? 0 : 1, dying: false, stuck: 0, speed: 26 * S.spd * rand(0.9, 1.1) };
+  // pre-fill a straight trail behind the leader
+  const need = Math.ceil((S.spread * 2.8 + 12) / PSTEP) + 3;
+  for (let i = 0; i < need; i++) sc.path.push([at.x - Math.cos(at.ang) * i * PSTEP, at.y - Math.sin(at.ang) * i * PSTEP]);
+  sc.maxPath = need;
+  return sc;
+}
+const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
+function steerLeader(sc, dt) {
+  const t = simT;
+  const want = sc.base + 0.9 * Math.sin(t * 0.05 + sc.p1) + 0.45 * Math.sin(t * 0.13 + sc.p2);
+  let vx = Math.cos(want), vy = Math.sin(want);
+  // look ahead along the current heading and push away from (and slide along) reef patches
+  let near = 1e9;
+  for (const ahead of [0, 25, 55, 95]) {
+    const px = sc.x + Math.cos(sc.ang) * ahead, py = sc.y + Math.sin(sc.ang) * ahead;
+    const s = curS(px, py);
+    near = Math.min(near, s);
+    if (s >= CLEAR) continue;
+    const w = Math.min(2.5, (CLEAR - s) / CLEAR) * (ahead ? 1.4 : 2.5);
+    const [gx, gy] = gradS(px, py);
+    const into = -(vx * gx + vy * gy);
+    if (into > 0) { vx += gx * into; vy += gy * into; }     // slide along the reef contour
+    vx += gx * w; vy += gy * w;
+  }
+  const target = Math.atan2(vy, vx);
+  const maxTurn = (near < CLEAR ? 1.7 : 0.9) * dt * Math.max(P.flow, 0.3);
+  sc.ang += Math.max(-maxTurn, Math.min(maxTurn, wrapA(target - sc.ang)));
+  sc.base += wrapA(sc.ang - sc.base) * Math.min(1, dt * 0.06);   // the preferred heading slowly follows the actual one
+}
+function stepSchools(dt) {
+  const area = Math.min(Math.max(W * H / (1920 * 1000), 0.6), 1.8);
+  const want = Math.round(P.fish * 8 * area);
+  const alive = schools.filter(s => !s.dying);
+  for (let i = want; i < alive.length; i++) alive[i].dying = true;
+  spawnWait -= dt;
+  for (let n = alive.length; n < want && spawnWait <= 0; n++) {
+    const sc = makeSchool(!schools.length || simT < 1);
+    if (sc) schools.push(sc); else spawnWait = 3;
+  }
+  for (let i = schools.length - 1; i >= 0; i--) {
+    const sc = schools[i];
+    sc.alpha = sc.dying ? sc.alpha - dt * 0.6 : Math.min(1, sc.alpha + dt * 0.5);
+    if (sc.alpha <= 0) { schools.splice(i, 1); continue; }
+    steerLeader(sc, dt);
+    const v = sc.speed * P.flow;
+    sc.x += Math.cos(sc.ang) * v * dt; sc.y += Math.sin(sc.ang) * v * dt;
+    // never cut across a reef flat: a leader that ends up inside one (e.g. the reef grew under it) drifts back out
+    const sl = curS(sc.x, sc.y);
+    // trapped inside a reef (it grew around the school): let the school fade away, a new one comes in from open water
+    sc.stuck = sl < 0 ? sc.stuck + dt : Math.max(0, sc.stuck - dt);
+    if (sc.stuck > 2.5) sc.dying = true;
+    if (sl < 25) {
+      const [gx, gy] = gradS(sc.x, sc.y), push = Math.min(25 - sl, 90) * 1.4 * dt;
+      sc.x += gx * push; sc.y += gy * push;
+    }
+    // extend the trail in fixed steps
+    let head = sc.path[0];
+    for (let g = 0; g < 8; g++) {
+      const dx = sc.x - head[0], dy = sc.y - head[1], l = Math.hypot(dx, dy);
+      if (l < PSTEP) break;
+      head = [head[0] + dx / l * PSTEP, head[1] + dy / l * PSTEP];
+      sc.path.unshift(head);
+    }
+    if (sc.path.length > sc.maxPath) sc.path.length = sc.maxPath;
+    // left the screen (whole school is out): come back in from another edge
+    const m = 150;
+    if (sc.x < -m || sc.x > W + m || sc.y < -m || sc.y > H + m) {
+      if (sc.dying) { schools.splice(i, 1); continue; }
+      const n = makeSchool(false);
+      if (n) { n.alpha = 1; schools[i] = n; } else schools.splice(i, 1);
+      continue;
+    }
+    // place each fish on the trail
+    const t = simT;
+    for (const f of sc.fish) {
+      const d = Math.max(0, f.d + 4 * Math.sin(t * 0.6 + f.ph));
+      const k = Math.min(d / PSTEP, sc.path.length - 2.001), i0 = Math.floor(k), u = k - i0;
+      const a = sc.path[i0], b = sc.path[i0 + 1];
+      const px = a[0] + (b[0] - a[0]) * u, py = a[1] + (b[1] - a[1]) * u;
+      let tx = a[0] - b[0], ty = a[1] - b[1]; const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
+      const lat = f.l * (0.85 + 0.15 * Math.sin(t * 0.4 + f.ph)) + 2.5 * Math.sin(t * 1.3 + f.ph * 2);
+      const nx = px - ty * lat, ny = py + tx * lat;
+      // heading from actual motion, smoothed
+      const mx = nx - f.x, my = ny - f.y, ml = Math.hypot(mx, my);
+      if (ml > 0.01) { f.c = f.c * 0.85 + (mx / ml) * 0.15; f.s = f.s * 0.85 + (my / ml) * 0.15; }
+      else { f.c = f.c * 0.9 + tx * 0.1; f.s = f.s * 0.9 + ty * 0.1; }
+      f.x = nx; f.y = ny;
+      f.sw += dt * (6 + 9 * P.flow) * (0.8 + 0.4 * Math.sin(f.ph));
+    }
+  }
+}
+
+/* ======================================================================
+   Sea turtle: now and then one glides slowly across the screen
+   ====================================================================== */
+const turtle = { on: false, next: 6 + Math.random() * 6, x: 0, y: 0, ang: 0, tx: 0, ty: 0, ph: 0, alpha: 0, inside: false, L: 84 };
+function spawnTurtle() {
+  const at = findWater(false);
+  Object.assign(turtle, { on: true, x: at.x - Math.cos(at.ang) * 60, y: at.y - Math.sin(at.ang) * 60, ang: at.ang, ph: 0, alpha: 1, inside: false });
+  turtle.tx = W / 2 + Math.cos(at.ang) * W * 0.9 + rand(-0.25, 0.25) * W;
+  turtle.ty = (H - TASKBAR) / 2 + Math.sin(at.ang) * H * 0.9 + rand(-0.25, 0.25) * H;
+}
+function stepTurtle(dt) {
+  if (!P.showTurtle) { turtle.on = false; return; }
+  if (!turtle.on) { turtle.next -= dt; if (turtle.next <= 0) spawnTurtle(); return; }
+  const tr = turtle;
+  tr.ph += dt * 1.5 * Math.max(P.flow, 0.05);
+  const want = Math.atan2(tr.ty - tr.y, tr.tx - tr.x) + 0.3 * Math.sin(simT * 0.04);
+  let vx = Math.cos(want), vy = Math.sin(want);
+  const s = curS(tr.x + Math.cos(tr.ang) * 50, tr.y + Math.sin(tr.ang) * 50);
+  if (s < 30) { const [gx, gy] = gradS(tr.x, tr.y); const w = Math.min(1, (30 - s) / 120) * 0.8; vx += gx * w; vy += gy * w; }
+  const maxTurn = 0.18 * dt * Math.max(P.flow, 0.3);
+  tr.ang += Math.max(-maxTurn, Math.min(maxTurn, wrapA(Math.atan2(vy, vx) - tr.ang)));
+  // thrust peaks while the front flippers sweep back, then the turtle glides
+  const thrust = 0.65 + 0.55 * Math.max(0, Math.cos(tr.ph));
+  const v = 15 * P.flow * thrust;
+  tr.x += Math.cos(tr.ang) * v * dt; tr.y += Math.sin(tr.ang) * v * dt;
+  const m = tr.L;
+  const inside = tr.x > -m && tr.x < W + m && tr.y > -m && tr.y < H + m;
+  if (inside) tr.inside = true;
+  else if (tr.inside) { tr.on = false; tr.next = rand(40, 100); }
+  else if (tr.x < -600 || tr.x > W + 600 || tr.y < -600 || tr.y > H + 600) { tr.on = false; tr.next = 5; }
+}
+
+/* ======================================================================
+   Sprite drawing (instanced quads)
+   ====================================================================== */
+const MAXI = 400;
+const inst = new Float32Array(MAXI * 12);
+const instBuf = gl.createBuffer();
+const spriteVAO = gl.createVertexArray();
+gl.bindVertexArray(spriteVAO);
+gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+gl.bufferData(gl.ARRAY_BUFFER, inst.byteLength, gl.DYNAMIC_DRAW);
+for (let k = 0; k < 3; k++) {
+  gl.enableVertexAttribArray(k);
+  gl.vertexAttribPointer(k, 4, gl.FLOAT, false, 48, k * 16);
+  gl.vertexAttribDivisor(k, 1);
+}
+gl.bindVertexArray(emptyVAO);
+function shadowOf(x, y) {
+  const dep = depthOf(curS(x, y)), o = 7 + 30 * dep;
+  return [o * 0.6, o * 0.8, dep];
+}
+function fillFish() {
+  let n = 0;
+  for (const sc of schools) {
+    const S = SPECIES[sc.sp];
+    for (const f of sc.fish) {
+      if (n >= MAXI - 1) break;
+      if (f.x < -40 || f.x > W + 40 || f.y < -40 || f.y > H + 40) continue;
+      const l = Math.hypot(f.c, f.s) || 1, [sx, sy, dep] = shadowOf(f.x, f.y);
+      inst.set([f.x, f.y, f.c / l, f.s / l, f.len, S.wid, f.sw, sc.sp, sx, sy, sc.alpha, dep], n * 12);
+      n++;
+    }
+  }
+  return n;
+}
+const TINT = [0.10, 0.52, 0.60];
+function drawSprites(prog, count, half, shadow) {
+  const { p, U } = prog;
+  gl.useProgram(p);
+  gl.uniform2f(U.uRes, cv.width / cv._scale, cv.height / cv._scale);
+  gl.uniform2f(U.uHalf, half[0], half[1]);
+  gl.uniform1f(U.uShadow, shadow ? 1 : 0);
+  gl.uniform3f(U.uTint, ...TINT);
+  gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, count);
+}
+
+/* ======================================================================
+   Desktop icons (DOM, standalone demo)
+   ====================================================================== */
+const desktop = document.getElementById('desktop');
+let icons = [], layoutKind = 'mine', selected = null, drag = null, extraIdx = 0, layoutCapacity = 0;
+const grid = { cols: 1, rows: 1 };
+let DW = innerWidth, DH = innerHeight - TASKBAR;
+function computeGrid() {
+  DW = innerWidth; DH = innerHeight - TASKBAR;
+  grid.cols = Math.max(1, Math.floor((DW - GRID_X0) / CELL_W));
+  grid.rows = Math.max(1, Math.floor((DH - GRID_Y0) / CELL_H));
+}
+const cellPos = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H });
+const occupied = (x, y, self) => icons.some(ic => ic !== self && Math.abs(ic.x - x) < CELL_W / 2 && Math.abs(ic.y - y) < CELL_H / 2);
+function nearestFreeCell(cx, cy, self) {
+  let best = null, bd = Infinity;
+  for (let c = 0; c < grid.cols; c++) for (let r = 0; r < grid.rows; r++) {
+    const pos = cellPos(c, r);
+    if (occupied(pos.x, pos.y, self)) continue;
+    const dd = Math.hypot(pos.x + CELL_W / 2 - cx, pos.y + CELL_H / 2 - cy);
+    if (dd < bd) { bd = dd; best = pos; }
+  }
+  return best;
+}
+function addIcon([name, type], pos, born = false) {
+  const el = document.createElement('div');
+  el.className = 'icon' + (born ? ' born' : '');
+  el.innerHTML = `<div class="glyph"><svg viewBox="0 0 48 48">${glyphOf(name, type)}</svg></div><div class="label">${name}</div>`;
+  el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px';
+  desktop.appendChild(el);
+  const ic = { name, type, x: pos.x, y: pos.y, w: el.offsetWidth, h: el.offsetHeight, el };
+  icons.push(ic); bindDrag(ic);
+  return ic;
+}
+function setPos(ic, x, y) { ic.x = x; ic.y = y; ic.el.style.left = x + 'px'; ic.el.style.top = y + 'px'; }
+function select(ic) {
+  if (selected) selected.el.classList.remove('sel');
+  selected = ic;
+  if (ic) ic.el.classList.add('sel');
+}
+function bindDrag(ic) {
+  const el = ic.el;
+  el.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.stopPropagation(); select(ic);
+    el.setPointerCapture(e.pointerId); el.classList.remove('settle');
+    drag = { ic, sx: e.clientX, sy: e.clientY, ox: ic.x, oy: ic.y, moved: false };
+  });
+  el.addEventListener('pointermove', e => {
+    if (!drag || drag.ic !== ic) return;
+    const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true; el.classList.add('drag');
+    el.style.left = drag.ox + dx + 'px'; el.style.top = drag.oy + dy + 'px';
+  });
+  const end = (e, cancel) => {
+    if (!drag || drag.ic !== ic) return;
+    const d = drag; drag = null;
+    el.classList.remove('drag');
+    if (!d.moved) return;
+    let nx = cancel ? d.ox : d.ox + (e.clientX - d.sx), ny = cancel ? d.oy : d.oy + (e.clientY - d.sy);
+    nx = Math.min(Math.max(nx, 0), DW - ic.w); ny = Math.min(Math.max(ny, 0), DH - ic.h);
+    if (P.snap && !cancel) { const c = nearestFreeCell(nx + ic.w / 2, ny + ic.h / 2, ic); if (c) { nx = c.x; ny = c.y; } }
+    if (Math.hypot(nx - d.ox, ny - d.oy) < 0.5) { setPos(ic, nx, ny); return; }
+    el.classList.add('settle'); setPos(ic, nx, ny);
+    commit();
+  };
+  el.addEventListener('pointerup', e => end(e, false));
+  el.addEventListener('pointercancel', e => end(e, true));
+}
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+function applyLayout(kind) {
+  layoutKind = kind;
+  icons.forEach(ic => ic.el.remove()); icons = []; selected = null; extraIdx = 0;
+  computeGrid();
+  layoutCapacity = grid.cols * grid.rows;
+  if (kind === 'mine') {
+    for (const [c, r, name, type] of mineCells()) {
+      const pos = cellPos(Math.round(c * (grid.cols - 1) / 21), Math.round(r * (grid.rows - 1) / 9));
+      if (!occupied(pos.x, pos.y, null)) addIcon([name, type], pos);
+    }
+  } else if (kind === 'arranged') {
+    FILES.forEach((f, i) => { const c = Math.floor(i / grid.rows), r = i % grid.rows; if (c < grid.cols) addIcon(f, cellPos(c, r)); });
+  } else if (kind === 'messy') {
+    const rnd = mulberry32(20260928);
+    for (const f of FILES) for (let t = 0; t < 300; t++) {
+      const c = rnd() < 0.45 ? Math.floor(rnd() * Math.min(3, grid.cols)) : Math.floor(rnd() * grid.cols);
+      const pos = cellPos(c, Math.floor(rnd() * grid.rows));
+      if (!occupied(pos.x, pos.y, null)) { addIcon(f, pos); break; }
+    }
+  } else {
+    Array.from({ length: 10 }, (_, r) => [[0, r], [1, r]]).flat().concat([[2, 0], [2, 1], [2, 2], [3, 0], [3, 1], [3, 2], [Math.floor(grid.cols * 0.45), Math.floor(grid.rows * 0.5)]])
+      .forEach(([c, r], i) => addIcon(FILES[i], cellPos(Math.min(c, grid.cols - 1), Math.min(r, grid.rows - 1))));
+  }
+  commit(true);
+}
+
+/* ======================================================================
+   Size / main loop
+   ====================================================================== */
+function resize() {
+  W = innerWidth; H = innerHeight;
+  // Preview: the page is laid out at full desktop size and scaled down, so a low-resolution canvas is enough
+  const scale = PREVIEW ? 0.45 : Math.min(devicePixelRatio || 1, P.quality);
+  // Use the canvas' real (fractional) box, otherwise the browser rescales the canvas by a pixel and blurs it
+  const box = cv.getBoundingClientRect();
+  cv.width = Math.round((box.width || W) * scale); cv.height = Math.round((box.height || H) * scale); cv._scale = scale;
+  Gw = Math.ceil(W / STEP) + 2; Gh = Math.ceil(H / STEP) + 2;
+  buildNoise();
+  allocField();
+  cacheOK = false;
+}
+
+const T0 = performance.now();
+let lastT = 0, fpsEMA = 0, frameN = 0, frameMs = 0;
+const px = new Uint8Array(4);
+let paused = false;                              // host: a maximised / fullscreen window is in front → pause
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (paused) { lastT = 0; return; }
+  if (P.cap30 && now - lastT < 31) return;
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.03;
+  if (lastT) fpsEMA = fpsEMA ? fpsEMA * 0.9 + (1 / dt) * 0.1 : 1 / dt;
+  lastT = now;
+  const e = Math.min((now - morphT0) / morphDur, 1);
+  curMix = e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2;
+  simT += dt * P.flow;
+  waterT += dt * (0.5 + 0.5 * P.flow);
+  stepSchools(dt);
+  stepTurtle(dt);
+  draw(now);
+  if (++frameN % 10 === 0) updateStats();
+}
+function draw(now) {
+  const measure = frameN % 20 === 0, t0 = performance.now();
+  ensureBed();
+  if (curMix < 1) { if (bedMix !== curMix || bedCur !== beds[1]) renderBed(true); }
+  else if (!cacheOK || bedMix !== curMix) renderBed(false);
+  // water over the cached bed
+  gl.bindVertexArray(emptyVAO);
+  const { p, U } = WATER;
+  gl.useProgram(p);
+  gl.viewport(0, 0, cv.width, cv.height);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, bedCur.tex);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, noiseTex);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, caustTex);
+  gl.uniform1i(U.uBed, 0); gl.uniform1i(U.uNoise, 1); gl.uniform1i(U.uCaust, 2);
+  gl.uniform2f(U.uRes, cv.width / cv._scale, cv.height / cv._scale);
+  gl.uniform1f(U.uScale, cv._scale);
+  gl.uniform1f(U.uSeed, (seed % 997) * 0.37);
+  gl.uniform1f(U.uTime, waterT);
+  gl.uniform1f(U.uCaustK, P.caustics);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  // shadows on the bottom, then the turtle, then the fish
+  const nf = fillFish();
+  const hasT = turtle.on && P.showTurtle;
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.bindVertexArray(spriteVAO);
+  gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+  if (hasT) {
+    const [sx, sy, dep] = shadowOf(turtle.x, turtle.y);
+    inst.set([turtle.x, turtle.y, Math.cos(turtle.ang), Math.sin(turtle.ang), turtle.L, 0, turtle.ph, 0, sx * 1.6, sy * 1.6, turtle.alpha, dep], nf * 12);
+  }
+  const total = nf + (hasT ? 1 : 0);
+  if (total) gl.bufferSubData(gl.ARRAY_BUFFER, 0, inst, 0, total * 12);
+  if (hasT) {
+    gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 48, nf * 48);
+    gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 48, nf * 48 + 16);
+    gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 48, nf * 48 + 32);
+    drawSprites(TURTLE, 1, [0.6, 0.6], true);
+    for (let k = 0; k < 3; k++) gl.vertexAttribPointer(k, 4, gl.FLOAT, false, 48, k * 16);
+  }
+  if (nf) drawSprites(FISH, nf, [0.62, 0.42], true);
+  if (hasT) {
+    for (let k = 0; k < 3; k++) gl.vertexAttribPointer(k, 4, gl.FLOAT, false, 48, nf * 48 + k * 16);
+    drawSprites(TURTLE, 1, [0.6, 0.6], false);
+    for (let k = 0; k < 3; k++) gl.vertexAttribPointer(k, 4, gl.FLOAT, false, 48, k * 16);
+  }
+  if (nf) drawSprites(FISH, nf, [0.62, 0.42], false);
+  gl.disable(gl.BLEND);
+  gl.bindVertexArray(emptyVAO);
+  if (measure) { gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); frameMs = performance.now() - t0; }
+}
+
+/* ======================================================================
+   Panel (standalone demo)
+   ====================================================================== */
+const statsEl = document.getElementById('stats');
+const GPU = (() => {
+  const ext = gl.getExtension('WEBGL_debug_renderer_info');
+  const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  return name.replace(/^ANGLE \([^,]+,\s*/, '').replace(/\s*\(0x[0-9a-f]+\).*$/i, '')
+    .replace(/\s*(Direct3D|vs_|OpenGL).*$/, '').replace(/\(R\)|\(TM\)/g, '').trim();
+})();
+function updateStats() {
+  const nfish = schools.reduce((a, s) => a + s.fish.length, 0);
+  statsEl.innerHTML =
+    `<span class="live">● live · ${fpsEMA.toFixed(0)} fps</span><br>GPU ${GPU}<br>` +
+    `frame ${frameMs.toFixed(1)} ms · bed ${bedMs.toFixed(1)} ms · field ${fieldMs.toFixed(0)} ms<br>` +
+    `canvas ${cv.width}×${cv.height} · icons ${icons.length} · fish ${nfish}`;
+}
+function syncPanel() {
+  document.querySelectorAll('.seg button').forEach(b => b.classList.toggle('on', b.dataset.v === layoutKind));
+  document.querySelectorAll('.toggles input').forEach(inp => { inp.checked = !!P[inp.dataset.key]; });
+}
+const slidersEl = document.getElementById('sliders');
+for (const s of SLIDERS) {
+  const wrap = document.createElement('div');
+  wrap.className = 'slider';
+  wrap.innerHTML = `<div class="row"><span>${s.label}</span><span></span></div><input type="range" min="${s.min}" max="${s.max}" step="${s.step}" value="${P[s.key]}">`;
+  const out = wrap.querySelector('.row span:last-child'), inp = wrap.querySelector('input');
+  out.textContent = s.fmt(P[s.key]);
+  inp.addEventListener('input', () => {
+    P[s.key] = +inp.value; out.textContent = s.fmt(P[s.key]);
+    if (s.act === 'field') refresh();
+  });
+  slidersEl.appendChild(wrap);
+}
+document.querySelector('.seg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  applyLayout(b.dataset.v); syncPanel();
+});
+document.querySelectorAll('.toggles input').forEach(inp => inp.addEventListener('change', () => {
+  const k = inp.dataset.key;
+  P[k] = typeof DEFAULTS[k] === 'number' ? (inp.checked ? 1 : 0) : inp.checked;
+}));
+document.getElementById('collapse').addEventListener('click', () => {
+  const p = document.getElementById('panel');
+  p.classList.toggle('collapsed');
+  document.getElementById('collapse').textContent = p.classList.contains('collapsed') ? '+' : '–';
+});
+// New seed (settings "refresh" / panel button). Before the first icons arrive in hosted mode, just remember it
+let iconsSeen = !(WALL || PREVIEW);
+function reseed(v) {
+  seed = v; buildNoise();
+  if (!iconsSeen) return;
+  commit(true);
+}
+document.getElementById('btnSeed').addEventListener('click', () => reseed((Math.random() * 1e6) | 0));
+document.getElementById('btnAdd').addEventListener('click', () => {
+  const f = EXTRA[extraIdx++ % EXTRA.length];
+  let pos = null;
+  for (let t = 0; t < 300 && !pos; t++) {
+    const c = cellPos(Math.floor(Math.random() * grid.cols), Math.floor(Math.random() * grid.rows));
+    if (!occupied(c.x, c.y, null)) pos = c;
+  }
+  if (!pos) return;
+  const ic = addIcon(f, pos, true);
+  select(ic);
+  commit();
+});
+desktop.addEventListener('pointerdown', () => select(null));
+addEventListener('keydown', e => {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+    const ic = selected; select(null); ic.el.remove(); icons = icons.filter(x => x !== ic); commit();
+  } else if (e.key === 'h' || e.key === 'H') document.getElementById('panel').classList.toggle('hidden');
+});
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => {
+    if (WALL || PREVIEW) { resize(); refresh(); return; }
+    resize(); computeGrid();
+    if (grid.cols * grid.rows > layoutCapacity && layoutCapacity < 40) { applyLayout(layoutKind); syncPanel(); return; }
+    for (const ic of icons) setPos(ic, Math.min(ic.x, Math.max(0, DW - ic.w)), Math.min(ic.y, Math.max(0, DH - ic.h)));
+    refresh();
+  }, 100);
+});
+function tickClock() {
+  const d = new Date(), z = n => String(n).padStart(2, '0');
+  document.getElementById('clock').innerHTML = `${z(d.getHours())}:${z(d.getMinutes())}<br>${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+setInterval(tickClock, 15000); tickClock();
+
+/* ---------- start ---------- */
+window.__dbg = {
+  P, applyLayout, schools, turtle, spawnTurtle, commit, refresh,
+  get icons() { return icons; },
+  bench() {
+    const ts = [], bs = [];
+    for (let i = 0; i < 10; i++) { const a = performance.now(); draw(performance.now()); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); ts.push(performance.now() - a); }
+    for (let i = 0; i < 5; i++) { cacheOK = false; const a = performance.now(); draw(performance.now()); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); bs.push(performance.now() - a); }
+    const ls = [];
+    for (let i = 0; i < 5; i++) { const a = performance.now(); renderBed(true); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); ls.push(performance.now() - a); }
+    cacheOK = false; draw(performance.now());
+    ts.sort((a, b) => a - b); bs.sort((a, b) => a - b); ls.sort((a, b) => a - b);
+    return { frame: +ts[5].toFixed(1), withBedRebuild: +bs[2].toFixed(1), morphBedHalfRes: +ls[2].toFixed(1), field: +fieldMs.toFixed(1), canvas: cv.width + 'x' + cv.height, gpu: GPU };
+  },
+};
+resize();
+buildNoiseTex();
+if (WALL || PREVIEW) startHostedMode();
+else { applyLayout('mine'); syncPanel(); }
+requestAnimationFrame(frame);
+
+/* ======================================================================
+   Hosted mode: the scene is driven from outside
+   - wallpaper (?wallpaper=1): the desktop host sends messages through WebView2
+   - preview (?preview=1): the settings window (settings.html) sends messages via iframe postMessage
+   Messages: icons (real icon rects, physical px) / settings (partial params) / reset (defaults) / pause
+   ====================================================================== */
+// Only accept the keys this theme exposes; reef size needs a new field
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);
+  let field = false, adaptiveChanged = false;
+  for (const k in v) {
+    if ((!SLIDERS.some(s => s.key === k) && !DISPLAY_KEYS.includes(k)) || typeof v[k] !== typeof P[k] || P[k] === v[k]) continue;
+    if (DISPLAY_KEYS.includes(k) && v[k] !== 0 && v[k] !== 1) continue;
+    P[k] = v[k];
+    if (k === 'adaptive') adaptiveChanged = true;
+    if (k === 'sigma') field = true;
+  }
+  if (adaptiveChanged && FB) commit();
+  else if (field && FB) refresh();
+}
+
+function drawGhosts() {
+  const box = document.getElementById('ghosts');
+  box.innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+
+function startHostedMode() {
+  document.body.classList.add('wall');
+  if (PREVIEW) {
+    document.body.classList.add('preview');
+    const g = document.createElement('div'); g.id = 'ghosts'; document.body.appendChild(g);
+  }
+  icons = [];
+  commit(true);                                   // open sea until we know where the icons are
+  let first = true;
+  const handle = m => {
+    if (m.t === 'pause') { paused = PREVIEW ? false : m.v; return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;       // physical px → CSS px
+    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    commit(first);                                // first time: the reef grows in; afterwards it follows the icons
+    first = false;
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => { if (ev.source === parent) handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => handle(JSON.parse(ev.data)));
+  host.postMessage('ready');
+}
+</script>
+<script src="share.js"></script>   <!-- share image / share animation -->
+</body>
+</html>

@@ -1,0 +1,1508 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terrarium · Snowy Mountains (prototype)</title>
+<!--
+  Terrarium · Snowy Mountains theme (top-down; WebGL2, 2D)
+  Look: a calm winter illustration seen from above.
+  - Every desktop icon sits in a clearing of soft blue-grey snow (drifts, sastrugi wind ripples, blue edge shade).
+    The snow under icons is kept mid-tone so the white icon labels stay readable.
+  - Outside the clearings: dense pine forest (layered star-shaped crowns with snow on the branches and long blue
+    shadows); the forest edge hugs the clearing shape with smaller young trees; a few snow-capped rocky outcrops.
+  - One small cabin with a smoking chimney sits away from the icons and relocates (fade out / fade in) when icons move there.
+  - Light snowfall drifts across the whole screen with gusty wind in four parallax layers.
+  Rendering:
+  - STATIC pass: ground, rocks, forest and cabin are rendered into a cached texture. It is only re-rendered while the
+    clearing field morphs (icons moved), the cabin fades, a setting changes or the canvas size changes.
+  - Every frame: one cheap full-screen composite (cache + drifting cloud shade + rare glints), then smoke puffs and
+    snowflakes as GL point sprites (positions computed in the vertex shader / tiny CPU particle list).
+-->
+<style>
+  :root { --taskbar: 48px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #a6c46e; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
+
+  .icon {
+    position: absolute; width: 76px; padding: 4px 2px 5px;
+    display: flex; flex-direction: column; align-items: center;
+    border: 1px solid transparent; border-radius: 4px;
+    user-select: none; touch-action: none; cursor: default;
+  }
+  .icon:hover { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.24); }
+  .icon.sel { background: rgba(0,120,215,.34); border-color: rgba(140,200,255,.7); }
+  .icon.drag { opacity: .88; z-index: 10; transform: scale(1.04); }
+  .icon.settle { transition: left .22s cubic-bezier(.2,.8,.3,1), top .22s cubic-bezier(.2,.8,.3,1); }
+  .icon.born { animation: born .45s cubic-bezier(.2,.9,.3,1.2); }
+  @keyframes born { from { opacity: 0; transform: scale(.6); } }
+  .glyph { width: 48px; height: 48px; filter: drop-shadow(0 1px 1px rgba(0,0,0,.25)) drop-shadow(3px 6px 4px rgba(90,80,110,.25)); pointer-events: none; }
+  .glyph svg { width: 100%; height: 100%; display: block; }
+  .label {
+    margin-top: 3px; max-width: 72px; font-size: 12px; line-height: 15px; color: #fff; text-align: center;
+    text-shadow: 0 0 2px rgba(0,0,0,.95), 0 1px 3px rgba(0,0,0,.85);
+    word-break: break-all; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    pointer-events: none;
+  }
+
+  #taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--taskbar);
+    background: rgba(28,32,38,.6); backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    border-top: 1px solid rgba(255,255,255,.08);
+    display: flex; align-items: center; justify-content: center; z-index: 40;
+  }
+  #taskbar .apps { display: flex; gap: 4px; }
+  #taskbar .app { width: 40px; height: 40px; border-radius: 4px; display: grid; place-items: center; }
+  #taskbar .app:hover { background: rgba(255,255,255,.08); }
+  #taskbar .app svg { width: 24px; height: 24px; }
+  #clock { position: absolute; right: 14px; color: #fff; font-size: 12px; line-height: 16px; text-align: right; }
+
+  #panel {
+    position: fixed; top: 14px; right: 14px; width: 284px; max-height: calc(100vh - var(--taskbar) - 28px); overflow: auto;
+    background: rgba(20,52,64,.74); backdrop-filter: blur(18px) saturate(1.3); -webkit-backdrop-filter: blur(18px) saturate(1.3);
+    color: #eef6f5; border: 1px solid rgba(255,255,255,.14); border-radius: 12px;
+    font-size: 12px; line-height: 1.4; box-shadow: 0 12px 32px rgba(0,0,0,.25); z-index: 50;
+  }
+  #panel.hidden { display: none; }
+  body.wall #panel, body.wall #taskbar, body.wall #desktop { display: none; }
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.preview #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(40,60,90,.28); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+  #panel header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 10px; }
+  #panel header b { font-size: 14px; letter-spacing: .06em; }
+  #panel header span { margin-left: 8px; opacity: .55; }
+  #panel.collapsed .body { display: none; }
+  .ibtn { background: none; border: 0; color: inherit; opacity: .6; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; }
+  .ibtn:hover { opacity: 1; }
+  #panel .body { padding: 0 14px 14px; }
+  .sec { margin-top: 12px; }
+  .sec > .t { opacity: .6; margin-bottom: 6px; }
+  .seg { display: grid; grid-template-columns: repeat(4, 1fr); background: rgba(255,255,255,.06); border-radius: 7px; padding: 2px; gap: 2px; }
+  .seg button { background: none; border: 0; color: inherit; padding: 5px 0; border-radius: 5px; cursor: pointer; font: inherit; opacity: .75; white-space: nowrap; }
+  .seg button:hover { opacity: 1; }
+  .seg button.on { background: rgba(255,255,255,.17); opacity: 1; }
+  .slider { margin-top: 9px; }
+  .slider .row { display: flex; justify-content: space-between; }
+  .slider .row span:last-child { opacity: .6; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; margin: 4px 0 0; accent-color: #7fe3d6; }
+  .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; }
+  .toggles label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .toggles input { accent-color: #7fe3d6; margin: 0; }
+  .btns { display: flex; gap: 6px; }
+  .btns button {
+    flex: 1; font: inherit; color: inherit; cursor: pointer; padding: 7px 0; border-radius: 7px;
+    background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.1);
+  }
+  .btns button:hover { background: rgba(255,255,255,.18); }
+  #stats { margin-top: 12px; padding: 8px 10px; border-radius: 7px; background: rgba(0,0,0,.25); font-family: Consolas, "Cascadia Mono", monospace; font-size: 11px; line-height: 1.6; color: #d4e4e2; }
+  #stats .live { color: #7fe3d6; }
+  .hint { margin-top: 10px; opacity: .5; font-size: 11px; line-height: 1.6; }
+  #nogl { position: fixed; inset: 0; display: none; place-items: center; color: #fff; font-size: 16px; }
+  html, body { background: #7d8ea3; }
+  #panel { background: rgba(24,36,52,.76); color: #eef3f8; }
+  input[type=range], .toggles input { accent-color: #a9d2ff; }
+  #stats { color: #d6e0ea; }
+  #stats .live { color: #a9d2ff; }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="desktop"></div>
+
+<div id="taskbar">
+  <div class="apps">
+    <div class="app"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="12.5" y="2" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="2" y="12.5" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="12.5" y="12.5" width="9.5" height="9.5" fill="#4cc2ff"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="#fff" stroke-width="2"/><path d="M15 15l5 5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v1H2z" fill="#e09b1d"/><path d="M2 9h20v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z" fill="#ffc83d"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#1b8fd6"/><path d="M6 13c1-5 11-6 12 0-3-2-8-2-9 2 0 2 2 3 4 3-4 1-7-1-7-5z" fill="#6fe37a" opacity=".9"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2.5" fill="#2b2b2b" stroke="#777"/><path d="M6 9l3 3-3 3M11 15h6" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg></div>
+  </div>
+  <div id="clock"></div>
+</div>
+
+<aside id="panel">
+  <header>
+    <div><b>Terrarium</b><span>Snowy Mountains · prototype</span></div>
+    <div><button class="ibtn" id="collapse" title="Collapse">–</button></div>
+  </header>
+  <div class="body">
+    <div class="sec"><div class="t">Desktop layout</div>
+      <div class="seg">
+        <button data-v="mine">Mine</button><button data-v="arranged">Arranged</button><button data-v="messy">Messy</button><button data-v="minimal">Minimal</button>
+      </div>
+    </div>
+    <div class="sec" id="sliders"></div>
+    <div class="sec toggles">
+      <label><input type="checkbox" data-key="showCabin">Cabin</label>
+      <label><input type="checkbox" data-key="debug">Clearing edges</label>
+      <label><input type="checkbox" data-key="snap">Snap to grid</label>
+      <label><input type="checkbox" data-key="cap30">Cap 30 fps</label>
+    </div>
+    <div class="sec btns">
+      <button id="btnAdd">＋ New file</button>
+      <button id="btnSeed">New scene</button>
+    </div>
+    <div id="stats"></div>
+    <div class="hint">Drag icons; the forest opens a clearing around them<br>Del deletes · H hides this panel</div>
+  </div>
+</aside>
+<div id="nogl">This browser does not support WebGL2.</div>
+
+<script>
+'use strict';
+
+/* ======================================================================
+   Parameters
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
+const STEP = 5;                 // clearing field grid (CSS px)
+const MORPH_MS = 1800;
+const TG = 36;                  // forest cell size (one tree candidate per cell)
+const RG = 150;                 // rock cell size (at most one outcrop per cell)
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');      // loaded by the Windows host as the wallpaper
+const PREVIEW = QS.has('preview');     // inside the settings window iframe
+// Defaults must equal the `default` values of the snow entry in themes.json
+const P = {
+  sigma: 70, snowfall: 0.5, wind: 1, trees: 0.75,
+  warp: 40, quality: 2,
+  debug: false, snap: true, cap30: true,
+  showCabin: 1, adaptive: 1,
+};
+const DEFAULTS = Object.assign({}, P);
+const DISPLAY_KEYS = ['showCabin', 'adaptive'];
+const pct = v => Math.round(v * 100) + '%';
+const SLIDERS = [
+  { key: 'sigma',    label: 'Clearing size',  min: 40, max: 200, step: 1,    fmt: v => v + ' px', act: 'field' },
+  { key: 'trees',    label: 'Forest density', min: 0,  max: 1,   step: 0.01, fmt: pct, act: 'scene' },
+  { key: 'snowfall', label: 'Snowfall',       min: 0,  max: 1,   step: 0.01, fmt: pct },
+  { key: 'wind',     label: 'Wind',           min: 0,  max: 3,   step: 0.05, fmt: v => '×' + v.toFixed(2) },
+];
+
+/* ======================================================================
+   Mock desktop icons (standalone demo only)
+   ====================================================================== */
+const PAGE = '<path d="M12 4h17l9 9v29a2 2 0 0 1-2 2H12a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" fill="#fbfbfb" stroke="#c4c4c4"/><path d="M29 4v7a2 2 0 0 0 2 2h7z" fill="#dedede"/>';
+const LINES = '<path d="M24 20h10M24 25h10M24 30h10M24 35h10" stroke="#c9c9c9" stroke-width="1.6"/>';
+const badge = (color, text, size = 11) => `<rect x="4" y="21" width="19" height="19" rx="3" fill="${color}"/><text x="13.5" y="34.5" text-anchor="middle" font-family="Segoe UI,Arial" font-weight="700" font-size="${size}" fill="#fff">${text}</text>`;
+const SVG = {
+  folder: '<path d="M4 12a3 3 0 0 1 3-3h11l4 4h19a3 3 0 0 1 3 3v2H4z" fill="#e09b1d"/><path d="M4 17h40v20a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3z" fill="#ffc83d"/><path d="M4 17h40v2.5H4z" fill="#ffd978"/>',
+  docx: PAGE + LINES + badge('#185abd', 'W'),
+  xlsx: PAGE + '<path d="M24 19h11v17H24zM24 24.5h11M24 30h11M29.5 19v17" stroke="#9ac9a9" stroke-width="1.3" fill="none"/>' + badge('#107c41', 'X'),
+  pdf:  PAGE + LINES + badge('#d33a2c', 'PDF', 7.5),
+  cad:  PAGE + LINES + badge('#2a7fd4', 'DWG', 7),
+  txt:  PAGE + '<path d="M16 18h16M16 23h16M16 28h16M16 33h10" stroke="#9a9a9a" stroke-width="1.6"/>',
+  png:  PAGE + '<rect x="14" y="17" width="20" height="17" rx="1.5" fill="#8fd0f5"/><path d="M14 30l6-6 5 5 3-3 6 6v1.5a1.5 1.5 0 0 1-1.5 1.5h-17A1.5 1.5 0 0 1 14 34z" fill="#3fa35a"/><circle cx="29" cy="21.5" r="2" fill="#fff4b8"/>',
+  shot: '<rect x="3" y="13" width="42" height="25" rx="1" fill="#1d2129" stroke="#f2f2f2" stroke-width="1.5"/><rect x="6" y="16" width="14" height="3" fill="#5b8def"/><rect x="6" y="21" width="22" height="2" fill="#6c7280"/><rect x="6" y="25" width="18" height="2" fill="#6c7280"/><rect x="31" y="16" width="11" height="18" fill="#2e3440"/>',
+  zip:  PAGE + '<path d="M22 4v4h3v3h-3v3h3v3h-3v3h3v3h-3" stroke="#8a6d3b" stroke-width="2" fill="none"/><rect x="20" y="26" width="7" height="8" rx="1" fill="#8a6d3b"/>',
+  bin:  '<path d="M12 14h24l-2.5 27a3 3 0 0 1-3 2.7H17.5a3 3 0 0 1-3-2.7z" fill="rgba(215,235,250,.55)" stroke="rgba(255,255,255,.9)" stroke-width="1.2"/><path d="M10 12.5h28" stroke="rgba(255,255,255,.95)" stroke-width="2.4" stroke-linecap="round"/><path d="M19 19l1 19M24 19v19M29 19l-1 19" stroke="rgba(255,255,255,.7)" stroke-width="1.2"/>',
+  pc:   '<rect x="5" y="8" width="38" height="26" rx="2" fill="#1f8fe0" stroke="#bfe3ff" stroke-width="1.5"/><path d="M5 30h38" stroke="#0d5fa8" stroke-width="3"/><path d="M19 34l-2 6h14l-2-6z" fill="#9aa7b4"/>',
+};
+const APP_COLORS = ['#e8553e','#2f7de1','#18a058','#8b5cf6','#f59e0b','#0ea5a4','#db2777','#334155','#16a34a','#2563eb'];
+function appSVG(name) {
+  let h = 0; for (const ch of name) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return `<rect x="5" y="5" width="38" height="38" rx="9" fill="${APP_COLORS[h % APP_COLORS.length]}"/><path d="M5 14a9 9 0 0 1 9-9h20a9 9 0 0 1 9 9v6H5z" fill="#fff" opacity=".14"/>` +
+    `<text x="24" y="31.5" text-anchor="middle" font-family="Segoe UI,Microsoft YaHei,Arial" font-weight="700" font-size="18" fill="#fff">${[...name][0]}</text>`;
+}
+const glyphOf = (name, type) => type === 'app' ? appSVG(name) : SVG[type];
+
+const FILES = [
+  ['回收站','bin'], ['项目资料','folder'], ['2026 报价单.xlsx','xlsx'], ['产品需求.docx','docx'],
+  ['截图_0927.png','png'], ['合同扫描件.pdf','pdf'], ['新建文件夹','folder'], ['设计素材','folder'],
+  ['旅行照片','folder'], ['安装包.zip','zip'], ['会议纪要.docx','docx'], ['壁纸灵感','folder'],
+  ['周报.xlsx','xlsx'], ['草图.png','png'], ['旧备份','folder'], ['微信图片.png','png'], ['说明书.pdf','pdf'], ['简历.docx','docx'], ['支出表.xlsx','xlsx'], ['压缩备份.zip','zip'], ['素材图.png','png'], ['下载','folder'], ['表情包.png','png'], ['工资条.xlsx','xlsx'], ['租房合同.pdf','pdf'], ['日记.docx','docx'], ['桌面截图.png','png'],
+];
+const EXTRA = [
+  ['新建文本文档.txt','txt'], ['新建文件夹 (2)','folder'], ['发票.pdf','pdf'], ['数据导出.xlsx','xlsx'],
+  ['截图_0928.png','png'], ['备忘.txt','txt'], ['归档.zip','zip'], ['新建文件夹 (3)','folder'],
+];
+const APPS = ['回收站','此电脑','微信','飞书','钉钉','腾讯会议','网易云音乐','剪映','Photoshop','Obsidian','VS Code','Krita',
+  'AutoCAD','Rhino','KeyShot','百度网盘','Chrome','Blender','Figma','Notion','QQ','Steam','Eagle','OBS','Kimi','PureRef','EV录屏','NX 12.0','MarkText','Codex'];
+const MISC = [['projects','folder'],['游戏','folder'],['todolist','folder'],['OKR管理.xlsx','xlsx'],['固定成本.xlsx','xlsx'],
+  ['pdfarrange','app'],['stp.log','txt'],['零件.stp','txt'],['零件.3dm','png'],['预览','folder']];
+const RIGHT = [['plot.log','txt'],['工具','folder'],['归档.rar','zip'],['1685x128.png','png'],['微信图片.jpg','png'],['0914.png','png'],
+  ['微信图片 2.jpg','png'],['images.png','png'],['目录.docx','docx'],['api.txt','txt'],['c4ef.png','png'],['0918.png','png'],
+  ['板调整.pdf','pdf'],['recommend.txt','txt'],['button.stp','txt'],['新建文本 (2).txt','txt'],['ugstep21','txt'],['新建文本 (3).txt','txt'],
+  ['工作计划.txt','txt'],['微信图片 3.jpg','png'],['新建 DOCX.docx','docx'],['SEO.txt','txt'],['resend.txt','txt'],['产品介绍.txt','txt'],
+  ['USER.pdf','pdf'],['新建文本.txt','txt'],['餐椅.pur','png'],['PAP-20.pdf','pdf'],['演示文稿.pptx','pdf'],['问题点.txt','txt']];
+function mineCells() {
+  const out = []; let a = 0, m = 0, rgt = 0, sh = 0;
+  for (let c = 0; c < 3; c++) for (let r = 0; r < 10; r++) {
+    const name = APPS[a++];
+    out.push([c, r, name, name === '回收站' ? 'bin' : name === '此电脑' ? 'pc' : 'app']);
+  }
+  for (let r = 0; r < 10; r++) out.push([3, r, ...MISC[m++]]);
+  for (let r = 0; r < 5; r++) out.push([5, r, `零件结构 ${r + 1}.dwg`, 'cad']);
+  out.push([6, 0, '腿测试.bak', 'txt']);
+  for (const [c, r] of [[6,4],[6,5],[6,6],[6,7],[6,8],[7,3],[7,4],[7,5],[7,6],[7,7],[8,4],[8,5],[8,6],[9,2],[9,3],[9,4],[9,5],[9,6]])
+    out.push([c, r, `ScreenShot ${++sh}.png`, 'shot']);
+  for (const [c, r] of [[11,1],[11,2],[11,3],[12,1],[12,2],[12,3],[12,4],[13,1],[13,2],[13,3],[13,4],[14,1],[14,3],[14,4],[15,1],[15,6],
+    [16,4],[16,6],[17,4],[17,5],[17,6],[17,7],[19,4],[19,5],[19,8],[20,0],[20,4],[20,6],[21,0],[21,5],[21,6]]) {
+    const f = RIGHT[rgt++ % RIGHT.length]; out.push([c, r, f[0], f[1]]);
+  }
+  return out;
+}
+
+/* ======================================================================
+   CPU noise + tileable noise texture
+   ====================================================================== */
+let seed = (Math.random() * 1e6) | 0;
+function hash2(x, y, k = 0) {
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(seed + k, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x, y, k = 0) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy, k), b = hash2(ix + 1, iy, k), c = hash2(ix, iy + 1, k), d = hash2(ix + 1, iy + 1, k);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+function fbm(x, y, k = 0) {
+  let a = 0.5, s = 0;
+  for (let i = 0; i < 4; i++) { s += a * vnoise(x, y, k + i * 7); x = x * 2.03 + 17.1; y = y * 2.03 + 17.1; a *= 0.5; }
+  return s;
+}
+function tileNoise(x, y, px, py, k) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const m = (v, p) => ((v % p) + p) % p;
+  const x0 = m(ix, px), x1 = m(ix + 1, px), y0 = m(iy, py), y1 = m(iy + 1, py);
+  const a = hash2(x0, y0, k), b = hash2(x1, y0, k), c = hash2(x0, y1, k), d = hash2(x1, y1, k);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+function tileFbm(u, v, periods, k) {
+  let s = 0, w = 0.5, tw = 0;
+  for (let i = 0; i < periods.length; i++) { s += w * tileNoise(u * periods[i], v * periods[i], periods[i], periods[i], k + i * 13); tw += w; w *= 0.5; }
+  return s / tw;
+}
+function makeNoiseImage() {
+  const S = 256, d = new Uint8Array(S * S * 4);
+  const chans = [[8, 16, 32, 64], [8, 16, 32, 64], [8, 16, 32], [16, 32, 64, 128]];
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = x / S, v = y / S, i = (y * S + x) * 4;
+    for (let c = 0; c < 4; c++) {
+      let n = tileFbm(u, v, chans[c], 100 + c * 50);
+      d[i + c] = Math.min(Math.max((n - 0.5) * 1.9 + 0.5, 0), 1) * 255;
+    }
+  }
+  return { S, d };
+}
+const sstep = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0), 1); return t * t * (3 - 2 * t); };
+
+/* ======================================================================
+   Clearing field (CPU): s = signed distance to the clearing edge (< 0 inside a clearing)
+   ====================================================================== */
+let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1, NZ = null;
+function buildNoise() {
+  const N = Gw * Gh;
+  NZ = { wx: new Float32Array(N), wy: new Float32Array(N) };
+  for (let gy = 0; gy < Gh; gy++) for (let gx = 0; gx < Gw; gx++) {
+    const i = gy * Gw + gx, x = gx * STEP, y = gy * STEP;
+    NZ.wx[i] = fbm(x * 0.0028, y * 0.0028, 1) - 0.47;
+    NZ.wy[i] = fbm(x * 0.0028, y * 0.0028, 2) - 0.47;
+  }
+}
+let fieldMs = 0;
+function computeField(rects) {
+  const t0 = performance.now();
+  const N = Gw * Gh, f1 = new Float32Array(N);
+  const sig = P.sigma, is1 = 1 / (sig * sig);
+  const wa = P.warp * 2.2, wmax = wa * 0.5;
+  for (const r of rects) {
+    const R = 5.5 * sig + Math.max(r.hw, r.hh) * 0.5 + wmax;
+    const gx0 = Math.max(0, Math.floor((r.cx - R) / STEP)), gx1 = Math.min(Gw - 1, Math.ceil((r.cx + R) / STEP));
+    const gy0 = Math.max(0, Math.floor((r.cy - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((r.cy + R) / STEP));
+    const chw = r.hw * 0.5, chh = r.hh * 0.5;
+    for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+      const i = gy * Gw + gx;
+      const qx = gx * STEP + NZ.wx[i] * wa, qy = gy * STEP + NZ.wy[i] * wa;
+      let dx = Math.abs(qx - r.cx) - chw, dy = Math.abs(qy - r.cy) - chh;
+      if (dx < 0) dx = 0; if (dy < 0) dy = 0;
+      f1[i] += Math.exp(-(dx * dx + dy * dy) * is1);
+    }
+  }
+  // Floor = contribution at the edge of the evaluated window, so no box-shaped seams far from icons
+  const c0 = Math.sqrt(-Math.log(0.35)), s = new Float32Array(N), fMin = Math.exp(-30);
+  for (let i = 0; i < N; i++) {
+    const g = Math.log(Math.max(f1[i], fMin));
+    s[i] = sig * (Math.sqrt(Math.max(-g, 0)) - c0) - sig * 0.6 * Math.max(g, 0);
+  }
+  fieldMs = performance.now() - t0;
+  return { s };
+}
+function sampleArr(a, x, y) {
+  const fx = Math.min(Math.max(x / STEP, 0), Gw - 1.001), fy = Math.min(Math.max(y / STEP, 0), Gh - 1.001);
+  const ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy, i = iy * Gw + ix;
+  return (a[i] * (1 - tx) + a[i + 1] * tx) * (1 - ty) + (a[i + Gw] * (1 - tx) + a[i + Gw + 1] * tx) * ty;
+}
+
+/* ======================================================================
+   Shaders
+   ====================================================================== */
+const VS_FULL = `#version 300 es
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+// Shared GLSL helpers
+const GLSL_COMMON = `
+const float TAU = 6.28318531;
+const vec2 SUN = vec2(-0.78, -0.62);        // direction towards the low winter sun (upper left)
+const vec2 SHV = vec2(0.78, 0.62);          // shadows fall to the lower right
+float hash2(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float ss(float a, float b, float x) { float t = clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
+`;
+
+/* ---------- STATIC pass: ground + rocks + forest + cabin, rendered into the cache texture ---------- */
+const FS_STATIC = `#version 300 es
+precision highp float;
+precision highp int;
+uniform sampler2D uNoise, uFA, uFB;
+uniform highp sampler2D uTree, uRock;
+uniform vec2 uRes, uGrid;
+uniform float uScale, uSeed, uStep, uMix, uDebug;
+uniform vec3 uTG;          // tree grid: cell size, cols, rows (texel (0,0) = screen cell (-2,-2))
+uniform vec3 uRG;          // rock grid: cell size, cols, rows (texel (0,0) = screen cell (-1,-1))
+uniform vec4 uCabin;       // x, y, visibility, angle
+out vec4 o;
+${GLSL_COMMON}
+
+// ---- palette ----
+const vec3 SNOW_LT   = vec3(0.665, 0.72, 0.805);  // open snow, sunlit side of drifts (still mid tone)
+const vec3 SNOW_SH   = vec3(0.475, 0.545, 0.665); // open snow, shaded side of drifts
+const vec3 SNOW_DEEP = vec3(0.24, 0.31, 0.42);    // forest floor
+const vec3 SHADOW_MUL = vec3(0.58, 0.66, 0.84);   // cast shadows: blue
+const vec3 PINE_LT = vec3(0.25, 0.40, 0.35);
+const vec3 PINE_SH = vec3(0.055, 0.135, 0.15);
+const vec3 TSNOW_LT = vec3(0.90, 0.93, 0.975);    // snow on branches / roofs / rocks
+const vec3 TSNOW_SH = vec3(0.56, 0.645, 0.78);
+const vec3 STONE_LT = vec3(0.52, 0.52, 0.55);
+const vec3 STONE_SH = vec3(0.20, 0.215, 0.255);
+const vec3 WOOD = vec3(0.30, 0.20, 0.15);
+const vec3 WARM = vec3(1.0, 0.72, 0.40);
+
+float h1(float n) { return fract(sin(n) * 43758.5453123); }
+vec4 N(vec2 p, float sc) { return texture(uNoise, p / sc + uSeed * 0.013); }
+float fieldS(sampler2D t, vec2 p) { return texture(t, (p / uStep + 0.5) / uGrid).r; }
+float field(vec2 p) { return mix(fieldS(uFA, p), fieldS(uFB, p), uMix); }
+float sdBox(vec2 p, vec2 b, float r) { vec2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
+
+// value noise with analytic derivatives (quintic) -> smooth drift shading without texture faceting
+vec3 noised(vec2 x) {
+  vec2 i = floor(x), f = fract(x);
+  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  vec2 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+  vec2 k = vec2(uSeed * 1.7, uSeed * 0.9);
+  float a = hash2(i + k), b = hash2(i + k + vec2(1.0, 0.0)), c = hash2(i + k + vec2(0.0, 1.0)), d = hash2(i + k + vec2(1.0, 1.0));
+  float k1 = b - a, k2 = c - a, k4 = a - b - c + d;
+  return vec3(a + k1 * u.x + k2 * u.y + k4 * u.x * u.y, du * vec2(k1 + k4 * u.y, k2 + k4 * u.x));
+}
+
+// ---- open snow: wind-blown drifts, sastrugi ripples, blue shade towards the forest edge ----
+vec3 groundSnow(vec2 p, float s, out float lit) {
+  // drift height gradient (px of height per px)
+  vec3 n1 = noised(p / 300.0), n2 = noised(p / 110.0 + 17.0), n3 = noised(p * vec2(1.0, 2.2) / 60.0 + 41.0);
+  vec2 g = n1.yz * (34.0 / 300.0) + n2.yz * (6.0 / 110.0) + n3.yz * vec2(1.0, 2.2) * (1.2 / 60.0);
+  lit = clamp(0.55 - dot(g, SUN) * 2.3, 0.0, 1.0);
+  vec3 c = mix(SNOW_SH, SNOW_LT, lit);
+  // sastrugi: ripples across the wind (wind blows left -> right); gentle lit windward slope, thin blue lee shadow
+  vec2 wd = vec2(0.97, 0.243), wp = vec2(-wd.y, wd.x);
+  float along = dot(p, wd), across = dot(p, wp);
+  float warp = (N(p, 520.0).g - 0.5) * 110.0 + (N(p, 170.0).r - 0.5) * 24.0;
+  float f = fract((along + warp) / 15.0);
+  float rip = ss(0.1, 0.78, f) - 2.0 * ss(0.78, 0.9, f) + ss(0.9, 1.0, f);
+  float patchM = ss(0.42, 0.7, N(p + 500.0, 700.0).a) * ss(0.32, 0.62, N(vec2(across, along * 3.0) + 900.0, 260.0).b);
+  c += rip * patchM * 0.028 * vec3(0.85, 0.92, 1.0);
+  // fine grain of the snow (per real pixel)
+  c *= 1.0 + (hash2(floor(p * max(uScale, 1.0)) + 7.0) - 0.5) * 0.022;
+  // large-scale light: a touch brighter towards the sun (upper left)
+  c *= 1.0 + 0.06 * (0.5 - (p.x / uRes.x * 0.6 + p.y / uRes.y * 0.4));
+  // soft blue shade near the forest edge (inside the clearing)
+  c = mix(c, c * vec3(0.80, 0.86, 0.98), ss(-55.0, 4.0, s) * 0.45);
+  return c;
+}
+
+// ---- pine crowns ----
+// Star outline of one tier in direction a: m branches, rot = rotation in branches. bx = across-branch coord (-0.5..0.5)
+float prof(float a, float m, float rot, float sd, out float bx) {
+  float f = a * (m / TAU) + rot;
+  float bi = floor(f);
+  bx = f - bi - 0.5;
+  float bs = abs(bx) * 2.0;
+  float len = 0.84 + 0.2 * h1(mod(bi, m) * 7.13 + sd * 91.7);
+  return 0.66 + 0.34 * pow(1.0 - bs, 1.2) * len + 0.03 * sin(f * TAU * 4.0) * (1.0 - bs);
+}
+float tierR(float R, float fi, float nT) { return R * mix(1.0, 0.26, fi / (nT - 1.0)); }
+// Topmost tier hit at offset v. Returns coverage (anti-aliased only on the outermost rim).
+float crown(vec2 v, float R, float sd, float aa, out float k, out float u, out float bx, out float nT) {
+  k = 0.0; u = 1.0; bx = 0.0; nT = R > 16.0 ? 4.0 : 3.0;
+  float r = length(v);
+  if (r > R * 1.06 + aa) return 0.0;
+  float a = atan(v.y, v.x);
+  for (int i = 3; i >= 0; i--) {
+    float fi = float(i);
+    if (fi > nT - 1.0) continue;
+    float b;
+    float Rt = tierR(R, fi, nT) * prof(a, 10.0 - fi, sd * 13.0 + fi * 0.5, sd + fi, b);
+    if (i == 0) {
+      float cov = clamp((Rt - r) / aa + 0.5, 0.0, 1.0);
+      if (cov > 0.0) { k = 0.0; u = min(r / Rt, 1.0); bx = b; }
+      return cov;
+    }
+    if (r < Rt) { k = fi; u = r / Rt; bx = b; return 1.0; }
+  }
+  return 0.0;
+}
+vec3 shadeCrown(vec2 p, vec2 v, float R, float sd, float aa) {
+  float k, u, bx, nT;
+  crown(v, R, sd, aa, k, u, bx, nT);
+  float r = max(length(v), 1e-3);
+  vec2 dir = v / r, tg = vec2(-dir.y, dir.x);
+  float radial = dot(dir, SUN);                       // sunny side of the cone
+  float facet = sign(bx) * dot(tg, SUN);              // each branch: one half catches the sun
+  float tip = ss(0.68, 1.0, u), bs = abs(bx) * 2.0;
+  float L = 0.40 + 0.30 * radial + 0.17 * facet * (0.35 + 0.65 * u) + 0.08 * k / nT;
+  vec3 col = mix(PINE_SH, PINE_LT, clamp(L + (N(p + sd * 300.0, 30.0).r - 0.5) * 0.18, 0.0, 1.0));
+  col = mix(col, PINE_SH * 0.75, ss(0.55, 1.0, bs) * 0.55);   // dark gaps between branches
+  col *= 1.0 - 0.2 * tip;
+  // the tier above casts a short shadow onto this tier
+  float cs = 0.0;
+  if (k < nT - 1.0) {
+    vec2 w = v - SHV * R * 0.2;
+    float b2, fi = k + 1.0;
+    float Rt = tierR(R, fi, nT) * prof(atan(w.y, w.x), 10.0 - fi, sd * 13.0 + fi * 0.5, sd + fi, b2);
+    cs = ss(1.2, -1.2, length(w) - Rt);
+    col *= mix(1.0, 0.45, cs);
+  }
+  // snow resting along each branch, in clumps
+  float sn = N(p + sd * 517.0, 15.0).g * 0.8 + N(p + sd * 211.0, 7.0).r * 0.2;
+  float amt = 0.3 - bs * 0.5 - u * 0.3 + (sn - 0.5) * 1.0 - tip * 0.5 + 0.12 * radial - cs * 0.3 + 0.1 * k / nT;
+  if (k >= nT - 1.0) amt += (1.0 - u) * 0.35;
+  float snow = ss(-0.03, 0.09, amt);
+  vec3 sc = mix(TSNOW_SH, TSNOW_LT, clamp(0.52 + 0.4 * radial + 0.22 * facet - cs * 0.55, 0.0, 1.0));
+  return mix(col, sc, snow);
+}
+// teardrop shadow of a crown on the ground
+float treeShadow(vec2 v, float R) {
+  vec2 d = SHV * R * 1.1;
+  float t = clamp(dot(v, d) / dot(d, d), 0.0, 1.0);
+  return ss(2.0, -2.0, length(v - d * t) - mix(R * 0.9, R * 0.2, t));
+}
+
+// ---- rocky outcrops: 2-3 chunky polygon blocks; fn = normal of the nearest face ----
+float rockSD(vec2 v, float S, float sd, out vec2 fn) {
+  float d = 1e9; fn = vec2(0.0);
+  int nb = h1(sd * 3.1) < 0.45 ? 2 : 3;
+  for (int b = 0; b < 3; b++) {
+    if (b >= nb) break;
+    float fb = float(b);
+    vec2 off = b == 0 ? vec2(0.0) : (vec2(h1(sd * 7.3 + fb), h1(sd * 5.9 + fb * 3.0)) - 0.5) * S * 1.15;
+    float rad = S * (b == 0 ? 0.62 : 0.36 + 0.2 * h1(sd * 2.7 + fb));
+    vec2 w = v - off;
+    float db = -1e9; vec2 nn = vec2(0.0);
+    for (int i = 0; i < 6; i++) {
+      float fi = float(i);
+      float ang = (fi + 0.4 * h1(sd * 11.0 + fb * 7.0 + fi)) * TAU / 6.0 + sd * 5.0 + fb;
+      vec2 n = vec2(cos(ang), sin(ang));
+      float di = dot(w, n) - rad * (0.84 + 0.16 * h1(sd * 13.0 + fb * 3.0 + fi));
+      if (di > db) { db = di; nn = n; }
+    }
+    if (db < d) { d = db; fn = nn; }
+  }
+  return d;
+}
+
+// ---- the cabin (local, early-out far away) ----
+vec3 cabinLayer(vec3 col, vec2 p, float aa, inout float spark) {
+  float vis = uCabin.z;
+  vec2 q = p - uCabin.xy;
+  if (vis <= 0.002 || dot(q, q) > 150.0 * 150.0) return col;
+  float ca = cos(uCabin.w), sa = sin(uCabin.w);
+  mat2 toL = mat2(ca, -sa, sa, ca);                   // world -> cabin local (rotate by -angle)
+  vec2 l = toL * q, shvL = toL * SHV, sunL = -shvL;
+  const vec2 HB = vec2(31.0, 20.0);                   // half size of the roof
+  const float WALL_H = 8.0;                           // the south log wall shows below the eave
+  vec3 c = col;
+  float sp = spark;
+  float yb = HB.y + WALL_H;                           // bottom of the south wall
+  // trodden yard
+  c = mix(c, c * vec3(0.94, 0.955, 1.0), ss(70.0, 34.0, length((l - vec2(0.0, 6.0)) * vec2(0.8, 1.0))) * 0.6);
+  // footpath from the door, winding away to the south-west, with footprints
+  float py = l.y - yb;
+  if (py > -2.0) {
+    float cx = -3.0 - py * 0.32 + sin(py * 0.05) * 8.0;
+    float pm = ss(1.6, -1.6, abs(l.x - cx) - 4.6) * ss(110.0, 50.0, py);
+    float row = floor(py / 8.0), side = mod(row, 2.0) * 2.0 - 1.0;
+    vec2 fp = vec2(l.x - cx - side * 2.0, py - row * 8.0 - 4.0);
+    float foot = ss(1.6, 0.6, length(fp * vec2(1.0, 0.6)));
+    c = mix(c, c * vec3(0.86, 0.9, 0.97), pm * 0.55);
+    c = mix(c, c * vec3(0.74, 0.8, 0.94), foot * pm * 0.55);
+    sp *= 1.0 - pm;
+  }
+  // house shadow (roof + wall) towards the lower right
+  float hs = sdBox(l - shvL * 13.0 - vec2(0.0, WALL_H * 0.5), HB + vec2(0.0, WALL_H * 0.5), 4.0);
+  c *= mix(vec3(1.0), SHADOW_MUL, ss(2.0, -2.0, hs) * 0.88);
+  // warm light from the windows and the door spilling onto the snow in front
+  float glow = ss(15.0, 0.0, length((l - vec2(-17.0, yb + 4.0)) * vec2(0.8, 1.3)))
+             + ss(15.0, 0.0, length((l - vec2(15.0, yb + 4.0)) * vec2(0.8, 1.3)))
+             + 0.9 * ss(17.0, 0.0, length((l - vec2(-3.0, yb + 3.0)) * vec2(1.0, 1.1)));
+  c += WARM * glow * 0.2;
+  // woodpile against the east gable
+  vec2 wl = l - vec2(HB.x + 7.0, 3.0);
+  c *= mix(vec3(1.0), SHADOW_MUL, ss(1.5, -1.5, sdBox(wl - shvL * 4.0, vec2(4.6, 11.0), 1.5)) * 0.8);
+  float wpd = sdBox(wl, vec2(4.6, 11.0), 1.5);
+  if (wpd < aa) {
+    float lg = fract(wl.x / 3.0 + 0.5);
+    vec3 wc = mix(WOOD * 0.55, WOOD * 1.6, ss(0.05, 0.6, lg) * (1.0 - ss(0.75, 1.0, lg)));
+    float wsnow = ss(0.0, 0.1, 0.5 - abs(wl.x + 1.0) / 4.6 * 0.6 + (N(p, 7.0).r - 0.5) * 0.8);
+    wc = mix(wc, mix(TSNOW_SH, TSNOW_LT, 0.65), wsnow);
+    float cov = clamp(0.5 - wpd / aa, 0.0, 1.0);
+    c = mix(c, wc, cov); sp *= 1.0 - cov;
+  }
+  // south log wall (in shade), windows glowing warm, a dark door
+  float wd = sdBox(l - vec2(0.0, HB.y + WALL_H * 0.5 - 1.0), vec2(HB.x - 3.0, WALL_H * 0.5 + 1.0), 0.8);
+  if (wd < aa) {
+    float ly = l.y - HB.y;
+    vec3 wc = WOOD * (0.75 + 0.5 * ss(0.15, 0.6, fract(ly / 2.6)) * (1.0 - ss(0.75, 1.0, fract(ly / 2.6))));
+    wc *= 0.9 + 0.2 * hash2(vec2(floor(ly / 2.6), floor(l.x / 9.0)));
+    float win = min(sdBox(l - vec2(-17.0, HB.y + 4.0), vec2(3.6, 2.2), 0.5), sdBox(l - vec2(15.0, HB.y + 4.0), vec2(3.6, 2.2), 0.5));
+    wc = mix(wc, vec3(1.0, 0.82, 0.52), ss(0.6, -0.6, win));
+    wc = mix(wc, vec3(0.16, 0.10, 0.07), ss(0.6, -0.6, sdBox(l - vec2(-3.0, HB.y + 4.5), vec2(3.2, 4.0), 0.4)));
+    float cov = clamp(0.5 - wd / aa, 0.0, 1.0);
+    c = mix(c, wc, cov); sp *= 1.0 - cov;
+  }
+  // roof: thick snow, the north slope faces the low sun
+  float dR = sdBox(l, HB, 4.5);
+  // icicles hanging from the south eave
+  float icx = fract(l.x / 3.1), icl = 1.0 + 3.5 * hash2(vec2(floor(l.x / 3.1), 9.0));
+  float ice = ss(0.5, 0.15, abs(icx - 0.5)) * ss(icl, icl - 1.2, l.y - HB.y) * step(HB.y - 1.0, l.y) * step(abs(l.x), HB.x - 4.0);
+  c = mix(c, vec3(0.82, 0.9, 1.0), ice * 0.85);
+  if (dR < aa) {
+    float north = l.y < 0.0 ? 1.0 : 0.0;
+    float slopeL = dot(vec2(0.0, north > 0.5 ? -1.0 : 1.0), sunL);
+    vec3 roof = mix(TSNOW_SH, TSNOW_LT, clamp(0.58 + 0.45 * slopeL, 0.0, 1.0));
+    roof *= 1.0 + (N(p, 30.0).r - 0.5) * 0.06;
+    roof = mix(roof, roof * 0.82, ss(1.4, 0.0, abs(l.y + 0.4)));           // ridge
+    roof = mix(roof, roof * vec3(0.82, 0.87, 0.97), ss(-5.0, 0.0, dR) * (0.4 + 0.4 * (1.0 - north)));  // rounded snow edge
+    // bargeboards: a little wood at the gable ends only
+    float gable = ss(HB.x - 2.6, HB.x - 1.0, abs(l.x)) * ss(0.0, -2.0, dR + 0.0) * (0.5 + 0.5 * N(p, 6.0).g);
+    roof = mix(roof, WOOD * 1.1, gable * 0.8);
+    // chimney (stone) on the north slope, with its shadow on the roof
+    vec2 cl = l - vec2(14.0, -10.0);
+    roof *= mix(1.0, 0.68, ss(1.0, -1.0, sdBox(cl - shvL * 5.5, vec2(4.2), 0.8)));
+    float chd = sdBox(cl, vec2(4.2), 0.8);
+    if (chd < aa) {
+      float L = clamp(0.5 + 0.5 * dot(normalize(cl + 1e-3), sunL), 0.0, 1.0);
+      vec3 st = mix(vec3(0.30, 0.27, 0.26), vec3(0.60, 0.55, 0.52), L);
+      st *= 0.85 + 0.3 * hash2(floor(cl * 0.55 + 3.0));
+      st = mix(st, TSNOW_LT, ss(0.0, 0.6, -cl.y - 1.5) * ss(-0.5, -2.0, chd) * 0.8);       // snow on the rim
+      st = mix(st, vec3(0.05, 0.04, 0.04), ss(0.6, -0.6, sdBox(cl, vec2(2.1), 0.5)));   // flue
+      roof = mix(roof, st, clamp(0.5 - chd / aa, 0.0, 1.0));
+    }
+    float cov = clamp(0.5 - dR / aa, 0.0, 1.0);
+    c = mix(c, roof, cov); sp *= 1.0 - cov;
+  }
+  spark = mix(spark, sp, vis);
+  return mix(col, c, vis);
+}
+
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, uRes.y * uScale - gl_FragCoord.y) / uScale;
+  float aa = 1.0 / uScale;
+  float s = field(p);
+  float lit;
+  vec3 col = groundSnow(p, s, lit);
+  float spark = lit;
+
+  // ---------- rocky outcrops ----------
+  ivec2 r0 = ivec2(floor(p / uRG.x)) + 1;
+  ivec2 rgs = ivec2(uRG.yz);
+  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+    ivec2 c = r0 + ivec2(i, j);
+    if (c.x < 0 || c.y < 0 || c.x >= rgs.x || c.y >= rgs.y) continue;
+    vec4 rk = texelFetch(uRock, c, 0);
+    if (rk.z <= 0.0) continue;
+    vec2 v = p - rk.xy;
+    float S = rk.z;
+    if (dot(v, v) > S * S * 5.5) continue;
+    vec2 fn, fn2;
+    float d = rockSD(v, S, rk.w, fn);
+    float ds = rockSD(v - SHV * S * 0.45, S, rk.w, fn2);
+    col *= mix(vec3(1.0), SHADOW_MUL, ss(2.0, -2.0, ds) * 0.85);
+    col = mix(col, col * vec3(0.85, 0.89, 0.97), ss(10.0, 0.0, d) * 0.5);   // snow banked around the rock
+    if (d < aa) {
+      float L = clamp(0.5 + 0.5 * dot(fn, SUN), 0.0, 1.0);
+      vec3 st = mix(STONE_SH, STONE_LT, L) * (0.88 + 0.24 * N(p, 11.0).r);
+      st = mix(st, STONE_SH * 0.7, ss(0.85, 1.0, N(p * vec2(1.0, 0.35) + rk.w * 50.0, 30.0).b) * 0.6);  // cracks
+      float inner = -d / S;
+      float amt = inner - 0.2 - 0.2 * (1.0 - L) + (N(p + 77.0, 13.0).r - 0.5) * 0.3;
+      float snow = ss(0.0, 0.05, amt);
+      vec3 sc = mix(TSNOW_SH, TSNOW_LT, clamp(0.55 + 0.45 * dot(fn, SUN) * (1.0 - ss(0.15, 0.4, inner)), 0.0, 1.0));
+      float cov = clamp(0.5 - d / aa, 0.0, 1.0);
+      col = mix(col, mix(st, sc, snow), cov);
+      spark *= 1.0 - cov;
+    }
+  }
+
+  // ---------- forest ----------
+  ivec2 c0 = ivec2(floor(p / uTG.x)) + 2;
+  ivec2 tgs = ivec2(uTG.yz);
+  float hA = -1e9, hB = -1e9, aA = 0.0, aB = 0.0, shade = 0.0, ao = 0.0;
+  vec4 tA = vec4(0.0), tB = vec4(0.0);
+  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+    ivec2 c = c0 + ivec2(i, j);
+    if (c.x < 0 || c.y < 0 || c.x >= tgs.x || c.y >= tgs.y) continue;
+    vec4 t = texelFetch(uTree, c, 0);
+    if (t.z <= 0.0) continue;
+    vec2 v = p - t.xy;
+    float R = t.z;
+    shade = max(shade, treeShadow(v, R));
+    float ar = min(R * 1.1, 40.0);
+    float q = max(0.0, 1.0 - dot(v, v) / (ar * ar));
+    ao += q * q * 0.7;
+    float k, u, bx, nT;
+    float cov = crown(v, R, t.w, aa, k, u, bx, nT);
+    if (cov <= 0.0) continue;
+    float hg = 1.7 * (R - length(v));                  // cone height: the taller crown wins
+    if (hg > hA) { hB = hA; tB = tA; aB = aA; hA = hg; tA = t; aA = cov; }
+    else if (hg > hB) { hB = hg; tB = t; aB = cov; }
+  }
+  col = mix(col, SNOW_DEEP, clamp(ao, 0.0, 1.0) * 0.5);
+  col *= mix(vec3(1.0), SHADOW_MUL, shade * 0.88);
+  spark *= (1.0 - shade) * (1.0 - clamp(ao * 1.5, 0.0, 1.0));
+  if (aB > 0.0) col = mix(col, shadeCrown(p, p - tB.xy, tB.z, tB.w, aa), aB);
+  if (aA > 0.0) {
+    vec3 cc = shadeCrown(p, p - tA.xy, tA.z, tA.w, aa);
+    // shadows of other, similar-sized trees falling onto this crown
+    float os = 0.0;
+    for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+      ivec2 c = c0 + ivec2(i, j);
+      if (c.x < 0 || c.y < 0 || c.x >= tgs.x || c.y >= tgs.y) continue;
+      vec4 t = texelFetch(uTree, c, 0);
+      if (t.z <= tA.z * 0.8 || t.xy == tA.xy) continue;
+      os = max(os, treeShadow(p - t.xy, t.z));
+    }
+    cc *= mix(vec3(1.0), SHADOW_MUL, os * 0.5);
+    col = mix(col, cc, aA);
+    spark *= 1.0 - aA;
+  }
+
+  // ---------- cabin ----------
+  col = cabinLayer(col, p, aa, spark);
+
+  if (uDebug > 0.5) col = mix(col, vec3(0.9, 0.15, 0.15), 1.0 - ss(0.0, 1.5, abs(s)));
+  o = vec4(col, clamp(spark, 0.0, 1.0));
+}`;
+
+/* ---------- COMPOSITE pass (every frame): cache + slow cloud shade + rare glints on sunlit snow ---------- */
+const FS_COMP = `#version 300 es
+precision highp float;
+uniform sampler2D uCache, uNoise;
+uniform vec2 uRes, uCloud;
+uniform float uScale, uT, uSeed;
+out vec4 o;
+${GLSL_COMMON}
+void main() {
+  vec4 c = texelFetch(uCache, ivec2(gl_FragCoord.xy), 0);
+  vec2 p = vec2(gl_FragCoord.x, uRes.y * uScale - gl_FragCoord.y) / uScale;
+  // very soft cloud shadows drifting with the wind
+  float cl = texture(uNoise, (p - uCloud) / 1600.0 + uSeed * 0.007).a;
+  float sh = ss(0.48, 0.8, cl) * 0.09;
+  vec3 col = c.rgb * (1.0 - sh * vec3(1.0, 0.85, 0.55));
+  // glints: a few sparse snow crystals catching the sun, slowly twinkling (time wraps every 600 s)
+  vec2 gc = floor(gl_FragCoord.xy / max(uScale * 1.25, 1.0));
+  float h = hash2(gc + uSeed);
+  if (h > 0.9965 && c.a > 0.25) {
+    float k = floor(3.0 + fract(h * 913.7) * 7.0);
+    float tw = pow(max(sin(uT * TAU * k / 600.0 + h * 4000.0), 0.0), 24.0);
+    col += vec3(0.95, 0.97, 1.0) * tw * c.a * 0.55;
+  }
+  o = vec4(col, 1.0);
+}`;
+
+/* ---------- snowflakes: point sprites, position fully computed in the vertex shader ---------- */
+const VS_SNOW = `#version 300 es
+precision highp float;
+uniform vec2 uRes;             // CSS px
+uniform float uScale, uT, uMaxPt;
+uniform uint uSeedU;
+uniform vec2 uOff[4];          // per-layer drift offsets (integrated + wrapped on the CPU)
+out float vA;
+out float vSoft;
+const float TAU = 6.28318531;
+float hu(uint x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return float(x) / 4294967295.0; }
+const int LMAP[10] = int[10](0, 0, 0, 0, 1, 1, 1, 2, 2, 3);
+const float SZ[4] = float[4](1.4, 2.1, 3.0, 4.6);
+const float SZV[4] = float[4](0.6, 0.8, 1.1, 2.2);
+const float AL[4] = float[4](0.62, 0.78, 0.88, 0.6);
+void main() {
+  uint id = uint(gl_VertexID);
+  int li = LMAP[gl_VertexID % 10];
+  float r1 = hu(id * 4u + uSeedU), r2 = hu(id * 4u + 1u + uSeedU), r3 = hu(id * 4u + 2u + uSeedU), r4 = hu(id * 4u + 3u + uSeedU);
+  vec2 dom = uRes + 80.0;
+  vec2 pos = vec2(r1, r2) * dom + uOff[li];
+  // sway: integer cycles per 600 s, so wrapping uT never jumps
+  float k1 = floor(110.0 + r3 * 250.0), k2 = floor(80.0 + r4 * 200.0);
+  float amp = 4.0 + float(li) * 3.5;
+  pos += vec2(sin(uT * TAU * k1 / 600.0 + r3 * TAU) * amp, cos(uT * TAU * k2 / 600.0 + r4 * TAU) * amp * 0.5);
+  pos = mod(pos, dom) - 40.0;
+  gl_Position = vec4(pos.x / uRes.x * 2.0 - 1.0, 1.0 - pos.y / uRes.y * 2.0, 0.0, 1.0);
+  float sz = (SZ[li] + SZV[li] * r4) * uScale;
+  gl_PointSize = clamp(sz, 1.0, uMaxPt);
+  vA = AL[li] * min(sz, 1.0);
+  vSoft = float(li) / 3.0;
+}`;
+const FS_SNOW = `#version 300 es
+precision mediump float;
+in float vA;
+in float vSoft;
+out vec4 o;
+void main() {
+  float d = length(gl_PointCoord - 0.5) * 2.0;
+  float a = (1.0 - smoothstep(mix(0.3, 0.0, vSoft), 1.0, d)) * vA;
+  o = vec4(vec3(0.95, 0.97, 1.0) * a, a);
+}`;
+
+/* ---------- chimney smoke: a short CPU particle list drawn as soft point sprites ---------- */
+const VS_SMOKE = `#version 300 es
+precision highp float;
+layout(location = 0) in vec4 aP;     // x, y (CSS px), diameter (CSS px), alpha
+layout(location = 1) in float aSd;
+uniform vec2 uRes;
+uniform float uScale, uMaxPt;
+out float vA;
+out float vSd;
+void main() {
+  gl_Position = vec4(aP.x / uRes.x * 2.0 - 1.0, 1.0 - aP.y / uRes.y * 2.0, 0.0, 1.0);
+  gl_PointSize = clamp(aP.z * uScale, 1.0, uMaxPt);
+  vA = aP.w; vSd = aSd;
+}`;
+const FS_SMOKE = `#version 300 es
+precision mediump float;
+uniform sampler2D uNoise;
+in float vA;
+in float vSd;
+out vec4 o;
+void main() {
+  vec2 c = gl_PointCoord - 0.5;
+  float d = length(c) * 2.0;
+  float n = texture(uNoise, gl_PointCoord * 0.38 + vSd * 7.0).r;
+  float a = (1.0 - smoothstep(0.15, 1.0, d + (n - 0.5) * 0.55)) * vA;
+  vec3 col = mix(vec3(0.70, 0.74, 0.80), vec3(0.93, 0.95, 0.98), smoothstep(0.7, 0.0, d + c.y * 0.6));
+  o = vec4(col * a, a);
+}`;
+
+/* ======================================================================
+   WebGL
+   ====================================================================== */
+const cv = document.getElementById('art');
+const gl = cv.getContext('webgl2', { antialias: false });
+if (!gl) { document.getElementById('nogl').style.display = 'grid'; throw new Error('WebGL2 unavailable'); }
+function program(vs, fs) {
+  const mk = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); throw new Error('shader'); }
+    return s;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, mk(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) console.error(gl.getProgramInfoLog(p));
+  const U = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i).name.replace(/\[0\]$/, ''); U[nm] = gl.getUniformLocation(p, nm); }
+  return { p, U };
+}
+const PR_STATIC = program(VS_FULL, FS_STATIC);
+const PR_COMP = program(VS_FULL, FS_COMP);
+const PR_SNOW = program(VS_SNOW, FS_SNOW);
+const PR_SMOKE = program(VS_SMOKE, FS_SMOKE);
+const vaoEmpty = gl.createVertexArray();
+const MAX_PT = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1] || 64;
+
+// smoke vertex buffer
+const SMOKE_MAX = 40;
+const smokeData = new Float32Array(SMOKE_MAX * 5);
+const smokeVAO = gl.createVertexArray(), smokeVBO = gl.createBuffer();
+gl.bindVertexArray(smokeVAO);
+gl.bindBuffer(gl.ARRAY_BUFFER, smokeVBO);
+gl.bufferData(gl.ARRAY_BUFFER, smokeData.byteLength, gl.DYNAMIC_DRAW);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 20, 0);
+gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 20, 16);
+gl.bindVertexArray(vaoEmpty);
+
+let noiseTex = null;
+function buildNoiseTex() {
+  const { S, d } = makeNoiseImage();
+  noiseTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, noiseTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, S, S, 0, gl.RGBA, gl.UNSIGNED_BYTE, d);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+}
+const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+function toHalf(v) {
+  f32[0] = v; const x = u32[0];
+  const sign = (x >>> 16) & 0x8000, e = ((x >>> 23) & 0xff) - 112, m = x & 0x7fffff;
+  if (e <= 0) return sign;
+  if (e >= 31) return sign | 0x7c00;
+  return sign | (e << 10) | (m >>> 13);
+}
+// Two clearing-field textures: morph from -> to
+const ftex = [null, null];
+let fromI = 0, toI = 0, morphT0 = -1e9, morphDur = MORPH_MS, FA = null, FB = null;
+function allocField() {
+  for (let i = 0; i < 2; i++) {
+    if (ftex[i]) gl.deleteTexture(ftex[i]);
+    ftex[i] = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, ftex[i]);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, Gw, Gh, 0, gl.RED, gl.HALF_FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+}
+function uploadField(i, Fd) {
+  const d = new Uint16Array(Gw * Gh);
+  for (let k = 0; k < d.length; k++) d[k] = toHalf(Fd.s[k]);
+  gl.bindTexture(gl.TEXTURE_2D, ftex[i]);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Gw, Gh, gl.RED, gl.HALF_FLOAT, d);
+}
+// float data textures (trees / rocks), read with texelFetch
+function dataTex(old, w, h) {
+  if (old) gl.deleteTexture(old);
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, w, h);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  return t;
+}
+
+const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2 - 4, hh: ic.h / 2 - 2 }));
+function commit(fromEmpty = false) {
+  const nf = computeField(P.adaptive ? iconRects() : []);
+  const target = 1 - toI;
+  if (fromEmpty) { FA = computeField([]); uploadField(toI, FA); }
+  else FA = FB;
+  FB = nf;
+  uploadField(target, FB);
+  fromI = toI; toI = target;
+  morphT0 = performance.now();
+  morphDur = fromEmpty ? 2600 : MORPH_MS;
+  pickCabin(fromEmpty);
+  cacheOK = false;
+}
+function refresh() {
+  FA = FB = computeField(P.adaptive ? iconRects() : []);
+  uploadField(toI, FB);
+  fromI = toI; morphT0 = -1e9;
+  pickCabin(false);
+  cacheOK = false;
+}
+let curMix = 1;
+const curS = (x, y) => FB ? sampleArr(FA.s, x, y) * (1 - curMix) + sampleArr(FB.s, x, y) * curMix : 999;
+
+/* ======================================================================
+   Scene tables (CPU): one tree candidate per forest cell, one rock candidate per rock cell.
+   Base data (positions, sizes, glade noise) depends only on seed + screen size; the per-frame
+   pass only scales trees/rocks by the clearing field, the cabin clearing and the forest density.
+   ====================================================================== */
+let tgW = 0, tgH = 0, treeBase = null, treeBuf = null, treeTex = null;
+let rgW = 0, rgH = 0, rockBase = null, rockBuf = null, rockTex = null;
+function buildSceneBase() {
+  tgW = Math.ceil(W / TG) + 4; tgH = Math.ceil(H / TG) + 4;
+  treeBase = new Float32Array(tgW * tgH * 6);     // x, y, R0, shade seed, glade noise, presence die
+  for (let gy = 0; gy < tgH; gy++) for (let gx = 0; gx < tgW; gx++) {
+    const cx = gx - 2, cy = gy - 2, o = (gy * tgW + gx) * 6;
+    const x = (cx + 0.15 + 0.7 * hash2(cx, cy, 501)) * TG, y = (cy + 0.15 + 0.7 * hash2(cx, cy, 502)) * TG;
+    const big = hash2(cx, cy, 503);
+    treeBase[o] = x; treeBase[o + 1] = y;
+    treeBase[o + 2] = TG * (0.6 + 0.45 * big * big);
+    treeBase[o + 3] = hash2(cx, cy, 504);
+    treeBase[o + 4] = fbm(x * 0.0021, y * 0.0021, 41);
+    treeBase[o + 5] = hash2(cx, cy, 505);
+  }
+  treeBuf = new Float32Array(tgW * tgH * 4);
+  treeTex = dataTex(treeTex, tgW, tgH);
+  rgW = Math.ceil(W / RG) + 2; rgH = Math.ceil(H / RG) + 2;
+  rockBase = new Float32Array(rgW * rgH * 4);     // x, y, size (0 = none), seed
+  for (let gy = 0; gy < rgH; gy++) for (let gx = 0; gx < rgW; gx++) {
+    const cx = gx - 1, cy = gy - 1, o = (gy * rgW + gx) * 4;
+    if (hash2(cx, cy, 601) > 0.3) continue;
+    const r = hash2(cx, cy, 604);
+    rockBase[o] = (cx + 0.2 + 0.6 * hash2(cx, cy, 602)) * RG;
+    rockBase[o + 1] = (cy + 0.2 + 0.6 * hash2(cx, cy, 603)) * RG;
+    rockBase[o + 2] = 13 + 20 * r * r;
+    rockBase[o + 3] = hash2(cx, cy, 605) * 100;
+  }
+  rockBuf = new Float32Array(rgW * rgH * 4);
+  rockTex = dataTex(rockTex, rgW, rgH);
+  cacheOK = false;
+}
+// how much of an object survives near the cabin (its own little clearing grows / shrinks with the cabin)
+function cabinClear(x, y, extra) {
+  if (cabin.vis <= 0) return 1;
+  const d = Math.hypot(x - cabin.x, y - cabin.y), r = (78 + extra) * cabin.vis;
+  return sstep(r - 26 * cabin.vis, r, d);
+}
+let treeCount = 0;
+function buildTables() {
+  // rocks: outside clearings only, never near the cabin
+  for (let i = 0; i < rgW * rgH; i++) {
+    const o = i * 4, S0 = rockBase[o + 2];
+    rockBuf[o] = rockBase[o]; rockBuf[o + 1] = rockBase[o + 1]; rockBuf[o + 3] = rockBase[o + 3]; rockBuf[o + 2] = 0;
+    if (S0 <= 0) continue;
+    const x = rockBase[o], y = rockBase[o + 1];
+    let sc = sstep(S0 + 10, S0 + 40, curS(x, y)) * cabinClear(x, y, S0 + 10);
+    const S = S0 * sc;
+    rockBuf[o + 2] = S > 4 ? S : 0;
+  }
+  // trees
+  const dens = Math.min(1, P.trees * 1.3), shift = (P.trees - 0.75) * 0.5;
+  treeCount = 0;
+  for (let gy = 0; gy < tgH; gy++) for (let gx = 0; gx < tgW; gx++) {
+    const i = gy * tgW + gx, b = i * 6, o = i * 4;
+    treeBuf[o + 2] = 0;
+    const glade = sstep(0.3, 0.46, treeBase[b + 4] + shift);
+    if (treeBase[b + 5] > (0.12 + 0.9 * glade) * dens) continue;
+    const x = treeBase[b], y = treeBase[b + 1], R0 = treeBase[b + 2];
+    let sc = sstep(0, R0 * 0.8, curS(x, y) - R0 * 0.3);
+    if (sc <= 0) continue;
+    sc *= cabinClear(x, y, R0 * 0.5);
+    // keep trees off the rocks
+    const rx = Math.floor(x / RG) + 1, ry = Math.floor(y / RG) + 1;
+    for (let j = ry - 1; j <= ry + 1; j++) for (let k = rx - 1; k <= rx + 1; k++) {
+      if (k < 0 || j < 0 || k >= rgW || j >= rgH) continue;
+      const ro = (j * rgW + k) * 4, S = rockBuf[ro + 2];
+      if (S <= 0) continue;
+      sc *= sstep(S * 0.8, S * 0.8 + R0 * 0.8, Math.hypot(x - rockBuf[ro], y - rockBuf[ro + 1]));
+    }
+    const R = R0 * sc;
+    if (R < 3) continue;
+    treeBuf[o] = x; treeBuf[o + 1] = y; treeBuf[o + 2] = R; treeBuf[o + 3] = treeBase[b + 3];
+    treeCount++;
+  }
+  gl.bindTexture(gl.TEXTURE_2D, treeTex);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, tgW, tgH, gl.RGBA, gl.FLOAT, treeBuf);
+  gl.bindTexture(gl.TEXTURE_2D, rockTex);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, rgW, rgH, gl.RGBA, gl.FLOAT, rockBuf);
+}
+
+/* ======================================================================
+   Cabin: sits in a free spot away from the icons; fades out and back in elsewhere when icons move there
+   ====================================================================== */
+const cabin = { x: 0, y: 0, ang: 0, vis: 0, tx: null, ty: null, placed: false };
+function iconDist(x, y) {
+  let d = 1e9;
+  for (const ic of icons) {
+    const dx = Math.max(ic.x - x, 0, x - ic.x - ic.w), dy = Math.max(ic.y - y, 0, y - ic.y - ic.h);
+    d = Math.min(d, Math.hypot(dx, dy));
+  }
+  return d;
+}
+const cabinNeed = () => 95 + P.sigma * (P.adaptive ? 0.9 : 0.3);
+const cabinFits = (x, y) => x >= 75 && x <= W - 75 && y >= 70 && y <= H - TASKBAR - 75;
+function pickCabin(force) {
+  const need = cabinNeed();
+  if (!force && cabin.placed && cabin.tx === null && cabinFits(cabin.x, cabin.y) && iconDist(cabin.x, cabin.y) >= need * 0.8) return;
+  const px = W * (0.52 + 0.3 * hash2(1, 1, 701)), py = (H - TASKBAR) * (0.3 + 0.4 * hash2(2, 2, 702));
+  let best = null, bs = -1e9;
+  for (let y = 75; y <= H - TASKBAR - 75; y += 18) for (let x = 80; x <= W - 80; x += 18) {
+    const d = iconDist(x, y);
+    const sc = Math.min(d, need) * 4 - Math.hypot((x - px) / W, (y - py) / H) * 220 + hash2(x, y, 703) * 6;
+    if (sc > bs) { bs = sc; best = [x, y]; }
+  }
+  if (!best) best = [W * 0.6, H * 0.45];
+  const ang = (hash2(best[0] | 0, best[1] | 0, 704) - 0.5) * 0.5;
+  if (!cabin.placed || force) { cabin.x = best[0]; cabin.y = best[1]; cabin.ang = ang; cabin.vis = 0; cabin.tx = null; cabin.placed = true; smoke.length = 0; }
+  else if (Math.hypot(best[0] - cabin.x, best[1] - cabin.y) > 1) { cabin.tx = best[0]; cabin.ty = best[1]; cabin.tang = ang; }
+}
+function stepCabin(dt) {
+  if (cabin.tx !== null) {
+    cabin.vis = Math.max(0, cabin.vis - dt / 0.9);
+    if (cabin.vis === 0) { cabin.x = cabin.tx; cabin.y = cabin.ty; cabin.ang = cabin.tang; cabin.tx = null; smoke.length = 0; }
+  } else if (P.showCabin) cabin.vis = Math.min(1, cabin.vis + dt / 1.6);
+  else cabin.vis = Math.max(0, cabin.vis - dt / 0.9);
+}
+function chimneyPos() {
+  const c = Math.cos(cabin.ang), s = Math.sin(cabin.ang), lx = 14, ly = -10;
+  return [cabin.x + c * lx - s * ly, cabin.y + s * lx + c * ly];
+}
+
+/* ======================================================================
+   Wind, snowfall and smoke (simulation clock)
+   ====================================================================== */
+let simT = 0, gust = 1, windX = 0, fallY = 0, cloudX = 0, cloudY = 0;
+const LAYER_SP = [0.55, 0.8, 1.12, 1.6];      // parallax: nearer layers move faster
+const layerOff = new Float32Array(8);
+const smoke = [];
+let smokeAcc = 0;
+function stepWorld(dt) {
+  simT += dt;
+  stepCabin(dt);
+  gust = 1 + 0.32 * Math.sin(simT * 0.21) + 0.18 * Math.sin(simT * 0.53 + 1.3) + 0.08 * Math.sin(simT * 1.37 + 0.4);
+  windX += P.wind * gust * 17 * dt;
+  fallY += (11 + 3 * Math.sin(simT * 0.17)) * dt;
+  cloudX = (cloudX + (3 + P.wind * 7) * dt) % 1600; cloudY = (cloudY + (1 + P.wind * 1.6) * dt) % 1600;
+  // smoke
+  if (P.showCabin && cabin.vis > 0.4 && cabin.tx === null) {
+    smokeAcc += dt;
+    const [chx, chy] = chimneyPos();
+    while (smokeAcc > 0.34) {
+      smokeAcc -= 0.34;
+      if (smoke.length < SMOKE_MAX) smoke.push({ x: chx, y: chy, vx: 0, vy: 0, age: 0, life: 5.5 + Math.random() * 2.5, s0: 4 + Math.random() * 2.5, sd: Math.random() });
+    }
+  }
+  for (let i = smoke.length - 1; i >= 0; i--) {
+    const q = smoke[i];
+    q.age += dt;
+    if (q.age > q.life) { smoke.splice(i, 1); continue; }
+    const k = Math.min(1, dt * 0.8);
+    q.vx += (P.wind * gust * 15 + 2 - q.vx) * k; q.vy += (-2.5 + P.wind * 2 - q.vy) * k;
+    q.x += (q.vx + Math.sin(q.age * 1.3 + q.sd * 6.28) * 3.5) * dt;
+    q.y += (q.vy + Math.cos(q.age * 1.1 + q.sd * 9.0) * 2.5) * dt;
+  }
+}
+
+/* ======================================================================
+   Desktop icons (DOM, standalone demo)
+   ====================================================================== */
+const desktop = document.getElementById('desktop');
+let icons = [], layoutKind = 'mine', selected = null, drag = null, extraIdx = 0, layoutCapacity = 0;
+const grid = { cols: 1, rows: 1 };
+let DW = innerWidth, DH = innerHeight - TASKBAR;
+function computeGrid() {
+  DW = innerWidth; DH = innerHeight - TASKBAR;
+  grid.cols = Math.max(1, Math.floor((DW - GRID_X0) / CELL_W));
+  grid.rows = Math.max(1, Math.floor((DH - GRID_Y0) / CELL_H));
+}
+const cellPos = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H });
+const occupied = (x, y, self) => icons.some(ic => ic !== self && Math.abs(ic.x - x) < CELL_W / 2 && Math.abs(ic.y - y) < CELL_H / 2);
+function nearestFreeCell(cx, cy, self) {
+  let best = null, bd = Infinity;
+  for (let c = 0; c < grid.cols; c++) for (let r = 0; r < grid.rows; r++) {
+    const pos = cellPos(c, r);
+    if (occupied(pos.x, pos.y, self)) continue;
+    const dd = Math.hypot(pos.x + CELL_W / 2 - cx, pos.y + CELL_H / 2 - cy);
+    if (dd < bd) { bd = dd; best = pos; }
+  }
+  return best;
+}
+function addIcon([name, type], pos, born = false) {
+  const el = document.createElement('div');
+  el.className = 'icon' + (born ? ' born' : '');
+  el.innerHTML = `<div class="glyph"><svg viewBox="0 0 48 48">${glyphOf(name, type)}</svg></div><div class="label">${name}</div>`;
+  el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px';
+  desktop.appendChild(el);
+  const ic = { name, type, x: pos.x, y: pos.y, w: el.offsetWidth, h: el.offsetHeight, el };
+  icons.push(ic); bindDrag(ic);
+  return ic;
+}
+function setPos(ic, x, y) { ic.x = x; ic.y = y; if (ic.el) { ic.el.style.left = x + 'px'; ic.el.style.top = y + 'px'; } }
+function select(ic) {
+  if (selected) selected.el.classList.remove('sel');
+  selected = ic;
+  if (ic) ic.el.classList.add('sel');
+}
+function bindDrag(ic) {
+  const el = ic.el;
+  el.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.stopPropagation(); select(ic);
+    el.setPointerCapture(e.pointerId); el.classList.remove('settle');
+    drag = { ic, sx: e.clientX, sy: e.clientY, ox: ic.x, oy: ic.y, moved: false };
+  });
+  el.addEventListener('pointermove', e => {
+    if (!drag || drag.ic !== ic) return;
+    const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true; el.classList.add('drag');
+    el.style.left = drag.ox + dx + 'px'; el.style.top = drag.oy + dy + 'px';
+  });
+  const end = (e, cancel) => {
+    if (!drag || drag.ic !== ic) return;
+    const d = drag; drag = null;
+    el.classList.remove('drag');
+    if (!d.moved) return;
+    let nx = cancel ? d.ox : d.ox + (e.clientX - d.sx), ny = cancel ? d.oy : d.oy + (e.clientY - d.sy);
+    nx = Math.min(Math.max(nx, 0), DW - ic.w); ny = Math.min(Math.max(ny, 0), DH - ic.h);
+    if (P.snap && !cancel) { const c = nearestFreeCell(nx + ic.w / 2, ny + ic.h / 2, ic); if (c) { nx = c.x; ny = c.y; } }
+    if (Math.hypot(nx - d.ox, ny - d.oy) < 0.5) { setPos(ic, nx, ny); return; }
+    el.classList.add('settle'); setPos(ic, nx, ny);
+    commit();
+  };
+  el.addEventListener('pointerup', e => end(e, false));
+  el.addEventListener('pointercancel', e => end(e, true));
+}
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+function applyLayout(kind) {
+  layoutKind = kind;
+  icons.forEach(ic => ic.el.remove()); icons = []; selected = null; extraIdx = 0;
+  computeGrid();
+  layoutCapacity = grid.cols * grid.rows;
+  if (kind === 'mine') {
+    for (const [c, r, name, type] of mineCells()) {
+      const pos = cellPos(Math.round(c * (grid.cols - 1) / 21), Math.round(r * (grid.rows - 1) / 9));
+      if (!occupied(pos.x, pos.y, null)) addIcon([name, type], pos);
+    }
+  } else if (kind === 'arranged') {
+    FILES.forEach((f, i) => { const c = Math.floor(i / grid.rows), r = i % grid.rows; if (c < grid.cols) addIcon(f, cellPos(c, r)); });
+  } else if (kind === 'messy') {
+    const rnd = mulberry32(20260928);
+    for (const f of FILES) for (let t = 0; t < 300; t++) {
+      const c = rnd() < 0.45 ? Math.floor(rnd() * Math.min(3, grid.cols)) : Math.floor(rnd() * grid.cols);
+      const pos = cellPos(c, Math.floor(rnd() * grid.rows));
+      if (!occupied(pos.x, pos.y, null)) { addIcon(f, pos); break; }
+    }
+  } else {
+    Array.from({ length: 10 }, (_, r) => [[0, r], [1, r]]).flat().concat([[2, 0], [2, 1], [2, 2], [3, 0], [3, 1], [3, 2], [Math.floor(grid.cols * 0.45), Math.floor(grid.rows * 0.5)]])
+      .forEach(([c, r], i) => addIcon(FILES[i], cellPos(Math.min(c, grid.cols - 1), Math.min(r, grid.rows - 1))));
+  }
+  commit(true);
+}
+
+/* ======================================================================
+   Size / render / main loop
+   ====================================================================== */
+let cacheTex = null, cacheFB = null, cacheW = 0, cacheH = 0, cacheOK = false, cacheKey = '', staticMs = 0, staticN = 0;
+function resize() {
+  W = innerWidth; H = innerHeight;
+  // preview: the page is laid out at full desktop size and scaled down, so a low resolution is enough
+  const scale = PREVIEW ? 0.45 : Math.min(devicePixelRatio || 1, P.quality);
+  // use the canvas' real (fractional) box so the canvas maps 1:1 to device pixels
+  const box = cv.getBoundingClientRect();
+  cv.width = Math.round((box.width || W) * scale); cv.height = Math.round((box.height || H) * scale); cv._scale = scale;
+  Gw = Math.ceil(W / STEP) + 2; Gh = Math.ceil(H / STEP) + 2;
+  buildNoise();
+  allocField();
+  buildSceneBase();
+}
+function ensureCache() {
+  if (cacheTex && cacheW === cv.width && cacheH === cv.height) return;
+  if (cacheTex) { gl.deleteTexture(cacheTex); gl.deleteFramebuffer(cacheFB); }
+  cacheW = cv.width; cacheH = cv.height;
+  cacheTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, cacheTex);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, cacheW, cacheH);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  cacheFB = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, cacheFB);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, cacheTex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  cacheOK = false;
+}
+function renderStatic() {
+  const t0 = performance.now();
+  buildTables();
+  const { p, U } = PR_STATIC;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, cacheFB);
+  gl.viewport(0, 0, cacheW, cacheH);
+  gl.disable(gl.BLEND);
+  gl.useProgram(p);
+  gl.bindVertexArray(vaoEmpty);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, noiseTex);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, ftex[fromI]);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, ftex[toI]);
+  gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, treeTex);
+  gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, rockTex);
+  gl.uniform1i(U.uNoise, 0); gl.uniform1i(U.uFA, 1); gl.uniform1i(U.uFB, 2); gl.uniform1i(U.uTree, 3); gl.uniform1i(U.uRock, 4);
+  gl.uniform2f(U.uRes, cacheW / cv._scale, cacheH / cv._scale);
+  gl.uniform2f(U.uGrid, Gw, Gh);
+  gl.uniform1f(U.uScale, cv._scale);
+  gl.uniform1f(U.uSeed, (seed % 997) * 0.37);
+  gl.uniform1f(U.uStep, STEP);
+  gl.uniform1f(U.uMix, curMix);
+  gl.uniform1f(U.uDebug, P.debug ? 1 : 0);
+  gl.uniform3f(U.uTG, TG, tgW, tgH);
+  gl.uniform3f(U.uRG, RG, rgW, rgH);
+  gl.uniform4f(U.uCabin, cabin.x, cabin.y, cabin.vis * cabin.vis * (3 - 2 * cabin.vis), cabin.ang);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  staticMs = performance.now() - t0;
+  staticN++;
+}
+const T0 = performance.now();
+let lastT = 0, fpsEMA = 0, frameN = 0, frameMs = 0;
+const px = new Uint8Array(4);
+let paused = false;                              // host: a maximized / fullscreen window is in front
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (paused) { lastT = 0; return; }
+  if (P.cap30 && now - lastT < 31) return;
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.03;
+  if (lastT) fpsEMA = fpsEMA ? fpsEMA * 0.9 + (1 / dt) * 0.1 : 1 / dt;
+  lastT = now;
+  const e = Math.min((now - morphT0) / morphDur, 1);
+  curMix = e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2;
+  stepWorld(dt);
+  draw(now);
+  if (++frameN % 10 === 0) updateStats();
+}
+function draw(now) {
+  const measure = frameN % 20 === 0, t0 = performance.now();
+  ensureCache();
+  // the static layer only changes while the field morphs, the cabin fades or a setting changes
+  const key = curMix.toFixed(4) + '|' + cabin.x + ',' + cabin.y + ',' + cabin.vis.toFixed(3) + ',' + cabin.ang;
+  if (!cacheOK || key !== cacheKey) { renderStatic(); cacheOK = true; cacheKey = key; }
+  const Wc = cv.width / cv._scale, Hc = cv.height / cv._scale, tw = simT % 600;
+  gl.viewport(0, 0, cv.width, cv.height);
+  gl.bindVertexArray(vaoEmpty);
+  // composite
+  gl.disable(gl.BLEND);
+  let { p, U } = PR_COMP;
+  gl.useProgram(p);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, cacheTex); gl.uniform1i(U.uCache, 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, noiseTex); gl.uniform1i(U.uNoise, 1);
+  gl.uniform2f(U.uRes, Wc, Hc); gl.uniform2f(U.uCloud, cloudX, cloudY);
+  gl.uniform1f(U.uScale, cv._scale); gl.uniform1f(U.uT, tw); gl.uniform1f(U.uSeed, (seed % 997) * 0.37);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  // smoke
+  if (smoke.length) {
+    const fade = cabin.vis;
+    smoke.forEach((q, i) => {
+      const o = i * 5, a = q.age / q.life;
+      smokeData[o] = q.x; smokeData[o + 1] = q.y; smokeData[o + 2] = 2 * (q.s0 + q.age * 4.2);
+      smokeData[o + 3] = 0.4 * sstep(0, 0.6, q.age) * (1 - sstep(0.3, 1, a)) * fade;
+      smokeData[o + 4] = q.sd;
+    });
+    ({ p, U } = PR_SMOKE);
+    gl.useProgram(p);
+    gl.bindVertexArray(smokeVAO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, smokeVBO);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, smokeData, 0, smoke.length * 5);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, noiseTex); gl.uniform1i(U.uNoise, 1);
+    gl.uniform2f(U.uRes, Wc, Hc); gl.uniform1f(U.uScale, cv._scale); gl.uniform1f(U.uMaxPt, MAX_PT);
+    gl.drawArrays(gl.POINTS, 0, smoke.length);
+    gl.bindVertexArray(vaoEmpty);
+  }
+  // snow
+  const nFlakes = Math.round(P.snowfall * 430 * Wc * Hc / 1e6);
+  if (nFlakes > 0) {
+    const dx = Wc + 80, dy = Hc + 80;
+    for (let l = 0; l < 4; l++) {
+      layerOff[l * 2] = ((windX * LAYER_SP[l]) % dx + dx) % dx;
+      layerOff[l * 2 + 1] = ((fallY * LAYER_SP[l]) % dy + dy) % dy;
+    }
+    ({ p, U } = PR_SNOW);
+    gl.useProgram(p);
+    gl.uniform2f(U.uRes, Wc, Hc); gl.uniform1f(U.uScale, cv._scale); gl.uniform1f(U.uT, tw); gl.uniform1f(U.uMaxPt, MAX_PT);
+    gl.uniform1ui(U.uSeedU, (seed * 7919) >>> 0);
+    gl.uniform2fv(U.uOff, layerOff);
+    gl.drawArrays(gl.POINTS, 0, nFlakes);
+  }
+  gl.disable(gl.BLEND);
+  if (measure) { gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); frameMs = performance.now() - t0; }
+}
+
+/* ======================================================================
+   Dev panel (standalone)
+   ====================================================================== */
+const statsEl = document.getElementById('stats');
+const GPU = (() => {
+  const ext = gl.getExtension('WEBGL_debug_renderer_info');
+  const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  return name.replace(/^ANGLE \([^,]+,\s*/, '').replace(/\s*\(0x[0-9a-f]+\).*$/i, '')
+    .replace(/\s*(Direct3D|vs_|OpenGL).*$/, '').replace(/\(R\)|\(TM\)/g, '').trim();
+})();
+function updateStats() {
+  statsEl.innerHTML =
+    `<span class="live">● running · ${fpsEMA.toFixed(0)} fps</span><br>GPU ${GPU}<br>` +
+    `frame ${frameMs.toFixed(1)} ms · static ${staticMs.toFixed(1)} ms (${staticN}×)<br>` +
+    `field ${fieldMs.toFixed(0)} ms · trees ${treeCount}<br>` +
+    `canvas ${cv.width}×${cv.height} · icons ${icons.length}`;
+}
+function syncPanel() {
+  document.querySelectorAll('.seg button').forEach(b => b.classList.toggle('on', b.dataset.v === layoutKind));
+  document.querySelectorAll('.toggles input').forEach(inp => { inp.checked = !!P[inp.dataset.key]; });
+}
+const slidersEl = document.getElementById('sliders');
+const sliderEls = {};
+for (const s of SLIDERS) {
+  const wrap = document.createElement('div');
+  wrap.className = 'slider';
+  wrap.innerHTML = `<div class="row"><span>${s.label}</span><span></span></div><input type="range" min="${s.min}" max="${s.max}" step="${s.step}" value="${P[s.key]}">`;
+  const out = wrap.querySelector('.row span:last-child'), inp = wrap.querySelector('input');
+  out.textContent = s.fmt(P[s.key]);
+  sliderEls[s.key] = { inp, out };
+  inp.addEventListener('input', () => {
+    P[s.key] = +inp.value; out.textContent = s.fmt(P[s.key]);
+    if (s.act === 'field') refresh();
+    else if (s.act === 'scene') cacheOK = false;
+  });
+  slidersEl.appendChild(wrap);
+}
+document.querySelector('.seg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  applyLayout(b.dataset.v); syncPanel();
+});
+document.querySelectorAll('.toggles input').forEach(inp => inp.addEventListener('change', () => {
+  const k = inp.dataset.key;
+  P[k] = typeof DEFAULTS[k] === 'number' ? (inp.checked ? 1 : 0) : inp.checked;
+  cacheOK = false;
+}));
+document.getElementById('collapse').addEventListener('click', () => {
+  const p = document.getElementById('panel');
+  p.classList.toggle('collapsed');
+  document.getElementById('collapse').textContent = p.classList.contains('collapsed') ? '+' : '–';
+});
+// New seed (settings window "refresh" / panel button). Before the host has sent icons, only remember it.
+let iconsSeen = !(WALL || PREVIEW);
+function reseed(v) {
+  seed = v; buildNoise(); buildSceneBase();
+  if (!iconsSeen) return;
+  commit(true);
+}
+document.getElementById('btnSeed').addEventListener('click', () => reseed((Math.random() * 1e6) | 0));
+document.getElementById('btnAdd').addEventListener('click', () => {
+  const f = EXTRA[extraIdx++ % EXTRA.length];
+  let pos = null;
+  for (let t = 0; t < 300 && !pos; t++) {
+    const c = cellPos(Math.floor(Math.random() * grid.cols), Math.floor(Math.random() * grid.rows));
+    if (!occupied(c.x, c.y, null)) pos = c;
+  }
+  if (!pos) return;
+  select(addIcon(f, pos, true));
+  commit();
+});
+desktop.addEventListener('pointerdown', () => select(null));
+addEventListener('keydown', e => {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+    const ic = selected; select(null); ic.el.remove(); icons = icons.filter(x => x !== ic); commit();
+  } else if (e.key === 'h' || e.key === 'H') document.getElementById('panel').classList.toggle('hidden');
+});
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => {
+    if (WALL || PREVIEW) { resize(); refresh(); return; }
+    resize(); computeGrid();
+    if (grid.cols * grid.rows > layoutCapacity && layoutCapacity < 40) { applyLayout(layoutKind); syncPanel(); return; }
+    for (const ic of icons) setPos(ic, Math.min(ic.x, Math.max(0, DW - ic.w)), Math.min(ic.y, Math.max(0, DH - ic.h)));
+    refresh();
+  }, 100);
+});
+function tickClock() {
+  const d = new Date(), z = n => String(n).padStart(2, '0');
+  document.getElementById('clock').innerHTML = `${z(d.getHours())}:${z(d.getMinutes())}<br>${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+setInterval(tickClock, 15000); tickClock();
+
+/* ---------- start ---------- */
+window.__dbg = {
+  P, cabin, applyLayout, commit, refresh, reseed,
+  icons: () => icons,
+  // move icon i to (x, y) as if it had been dragged there
+  move(i, x, y) { const ic = icons[i]; if (!ic) return; if (ic.el) ic.el.classList.add('settle'); setPos(ic, x, y); commit(); },
+  set(v) { applySettings(v); },
+  bench() {
+    const ts = [], st = [];
+    for (let i = 0; i < 10; i++) { const a = performance.now(); draw(performance.now()); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); ts.push(performance.now() - a); }
+    for (let i = 0; i < 6; i++) { cacheOK = false; const a = performance.now(); draw(performance.now()); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); st.push(performance.now() - a); }
+    ts.sort((a, b) => a - b); st.sort((a, b) => a - b);
+    return { frame: +ts[5].toFixed(2), staticRebuild: +st[3].toFixed(1), canvas: cv.width + 'x' + cv.height, trees: treeCount, gpu: GPU };
+  },
+};
+resize();
+buildNoiseTex();
+if (WALL || PREVIEW) startHostedMode();
+else { applyLayout('mine'); syncPanel(); }
+requestAnimationFrame(frame);
+
+/* ======================================================================
+   Hosted mode: driven from outside
+   - wallpaper (?wallpaper=1): the desktop host sends messages through WebView2
+   - preview (?preview=1): the settings window (settings.html) posts messages into the iframe
+   Messages: icons (real icon rects, physical px) / settings (partial) / reset (defaults) / pause
+   ====================================================================== */
+// Only keys that are sliders or display options are accepted
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);
+  let field = false, adaptiveChanged = false, scene = false;
+  for (const k in v) {
+    if ((!SLIDERS.some(s => s.key === k) && !DISPLAY_KEYS.includes(k)) || typeof v[k] !== typeof P[k] || P[k] === v[k]) continue;
+    if (DISPLAY_KEYS.includes(k) && v[k] !== 0 && v[k] !== 1) continue;
+    const sl = SLIDERS.find(s => s.key === k);
+    if (sl && !(v[k] >= sl.min && v[k] <= sl.max)) continue;
+    P[k] = v[k];
+    if (sliderEls[k]) { sliderEls[k].inp.value = P[k]; sliderEls[k].out.textContent = sl.fmt(P[k]); }
+    if (k === 'adaptive') adaptiveChanged = true;
+    if (k === 'sigma') field = true;
+    if (k === 'trees' || k === 'showCabin') scene = true;
+  }
+  if (adaptiveChanged && FB) commit();
+  else if (field && FB) refresh();
+  if (scene) cacheOK = false;
+  if (!(WALL || PREVIEW)) syncPanel();
+}
+
+function drawGhosts() {
+  const box = document.getElementById('ghosts');
+  box.innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+
+function startHostedMode() {
+  document.body.classList.add('wall');
+  if (PREVIEW) {
+    document.body.classList.add('preview');
+    const g = document.createElement('div'); g.id = 'ghosts'; document.body.appendChild(g);
+  }
+  icons = [];
+  commit(true);                                   // an unbroken forest until we know where the icons are
+  let first = true;
+  const handle = m => {
+    if (!m || typeof m !== 'object') return;
+    if (m.t === 'pause') { paused = PREVIEW ? false : !!m.v; return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;       // physical px -> CSS px
+    icons = m.vis && Array.isArray(m.r) ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    commit(first);                                // first time: clearings open up; later: morph smoothly
+    first = false;
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => {
+      if (ev.source !== parent) return;
+      try { handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); } catch (e) { }
+    });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => { try { handle(JSON.parse(ev.data)); } catch (e) { } });
+  host.postMessage('ready');
+}
+</script>
+<script src="share.js"></script>   <!-- share image / share video (sample icons, labels as blocks) -->
+</body>
+</html>

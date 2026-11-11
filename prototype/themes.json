@@ -173,6 +173,320 @@
           ]
         }
       ]
+    },
+    {
+      "id": "space",
+      "adaptive": true,
+      "name": "星空",
+      "desc": "扁平插画风的深蓝夜空，图标浮在柔光星云里，星星闪烁，偶有流星划过，一颗带环的小行星缓缓环绕",
+      "page": "space.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "url(thumbs/space.webp?v=548f1dc579) center / cover no-repeat, radial-gradient(circle at 78% 30%, #f6d2b0 0 2.2%, transparent 2.6%), radial-gradient(ellipse 7% 2% at 78% 30%, transparent 55%, #b9addf 60%, #b9addf 80%, transparent 85%), radial-gradient(circle at 18% 72%, #fff 0 0.35%, transparent 0.6%), radial-gradient(circle at 62% 14%, #fff 0 0.35%, transparent 0.6%), radial-gradient(circle at 90% 80%, #fff 0 0.3%, transparent 0.55%), radial-gradient(circle at 46% 86%, #fff 0 0.3%, transparent 0.55%), radial-gradient(ellipse 30% 26% at 22% 34%, #7d3a72 0%, #5a2f86 55%, #33225f 78%, transparent 82%), radial-gradient(ellipse 26% 22% at 58% 62%, #2a6478 0%, #22506a 55%, #1d2f55 78%, transparent 82%), radial-gradient(ellipse 18% 15% at 86% 56%, #5a3a92 0%, #3c2a6e 60%, transparent 80%), linear-gradient(170deg, #070a1f 0%, #0d0f2a 50%, #1b1442 100%)",
+      "groups": [
+        {
+          "name": "图标周围",
+          "params": [
+            {
+              "key": "sigma",
+              "label": "星云大小",
+              "hint": "图标所在的星云从图标往外铺多远",
+              "min": 40,
+              "max": 200,
+              "step": 1,
+              "default": 72,
+              "unit": "px"
+            }
+          ]
+        },
+        {
+          "name": "星空",
+          "params": [
+            {
+              "key": "stars",
+              "label": "星星密度",
+              "hint": "夜空里星星有多密",
+              "min": 0,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.6,
+              "format": "percent"
+            },
+            {
+              "key": "twinkle",
+              "label": "闪烁速度",
+              "hint": "星星闪烁得多快",
+              "min": 0,
+              "max": 3,
+              "step": 0.05,
+              "default": 1,
+              "format": "times"
+            },
+            {
+              "key": "shooting",
+              "label": "流星",
+              "hint": "流星划过空旷夜空的频率，不会经过图标",
+              "min": 0,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.35,
+              "format": "percent"
+            }
+          ]
+        },
+        {
+          "name": "行星",
+          "params": [
+            {
+              "key": "showPlanet",
+              "label": "显示行星",
+              "hint": "在空旷处缓缓环绕的带环小行星和它的卫星",
+              "options": [
+                "隐藏",
+                "显示"
+              ],
+              "default": 1
+            }
+          ]
+        }
+      ],
+      "thumbSource": "custom"
+    },
+    {
+      "id": "snow",
+      "adaptive": true,
+      "name": "雪山",
+      "desc": "俯瞰的冬日雪林，图标落在蓝灰色的雪地空地里，积雪的松林沿空地边缘生长，小木屋炊烟袅袅，细雪随风飘落",
+      "page": "snow.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "url(thumbs/snow.webp?v=58b8c045f8) center / cover no-repeat, radial-gradient(ellipse 17% 24% at 22% 40%, #8b9cb4 0 58%, transparent 74%), radial-gradient(ellipse 13% 18% at 56% 62%, #91a2b9 0 56%, transparent 74%), radial-gradient(ellipse 4% 5% at 77% 48%, #dfe7f1 0 55%, #6b5240 60% 75%, transparent 80%), radial-gradient(ellipse 9% 12% at 77% 50%, #8d9eb6 0 60%, transparent 76%), radial-gradient(circle at 40% 38%, #dfe8f2 0 10%, #2c4a43 13% 44%, transparent 47%) 0 0 / 18px 18px, radial-gradient(circle at 45% 42%, #d7e1ec 0 9%, #23403a 12% 42%, transparent 45%) 9px 10px / 18px 18px, linear-gradient(160deg, #4d6470 0%, #2b4044 100%)",
+      "groups": [
+        {
+          "name": "图标周围",
+          "params": [
+            {
+              "key": "sigma",
+              "label": "空地大小",
+              "hint": "图标周围的雪地空地从图标往外铺多远",
+              "min": 40,
+              "max": 200,
+              "step": 1,
+              "default": 70,
+              "unit": "px"
+            }
+          ]
+        },
+        {
+          "name": "森林",
+          "params": [
+            {
+              "key": "trees",
+              "label": "森林密度",
+              "hint": "空地以外的松林有多密，越低林间空地越多",
+              "min": 0,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.75,
+              "format": "percent"
+            },
+            {
+              "key": "showCabin",
+              "label": "显示小木屋",
+              "hint": "远离图标的空地上一座冒着炊烟的小木屋",
+              "options": [
+                "隐藏",
+                "显示"
+              ],
+              "default": 1
+            }
+          ]
+        },
+        {
+          "name": "飘雪",
+          "params": [
+            {
+              "key": "snowfall",
+              "label": "雪量",
+              "hint": "飘落的雪花有多少",
+              "min": 0,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.5,
+              "format": "percent"
+            },
+            {
+              "key": "wind",
+              "label": "风力",
+              "hint": "风吹雪花、炊烟和云影的速度",
+              "min": 0,
+              "max": 3,
+              "step": 0.05,
+              "default": 1,
+              "format": "times"
+            }
+          ]
+        }
+      ],
+      "thumbSource": "custom"
+    },
+    {
+      "id": "reef",
+      "adaptive": true,
+      "name": "珊瑚礁",
+      "desc": "俯瞰清浅的热带海，图标落在彩色珊瑚环绕的沙地上，鱼群绕着礁石游过",
+      "page": "reef.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "url(thumbs/reef.webp?v=4866681fc2) center / cover no-repeat, radial-gradient(circle at 30% 34%, #c8a978 0 9%, #e98a72 10% 12%, #9a6fc4 13% 14%, rgba(78,170,180,.55) 16%, transparent 24%), radial-gradient(circle at 74% 70%, #c8a978 0 7%, #f0a14a 8% 10%, #d9b04a 11% 12%, rgba(78,170,180,.55) 14%, transparent 21%), radial-gradient(circle at 82% 22%, #e98a72 0 3%, rgba(78,170,180,.45) 5%, transparent 10%), linear-gradient(90deg, #c6a675 0 13%, #e98a72 14% 15%, #3f9fae 18%, transparent 30%), linear-gradient(160deg, #0f6a86 0%, #0b4a6e 100%)",
+      "groups": [
+        {
+          "name": "图标周围",
+          "params": [
+            {
+              "key": "sigma",
+              "label": "礁盘大小",
+              "hint": "图标脚下的沙地和珊瑚环从图标往外铺多远",
+              "min": 40,
+              "max": 200,
+              "step": 1,
+              "default": 72,
+              "unit": "px"
+            }
+          ]
+        },
+        {
+          "name": "海水",
+          "params": [
+            {
+              "key": "caustics",
+              "label": "水底光纹",
+              "hint": "阳光透过水面在沙底上晃动的光纹有多亮",
+              "min": 0,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.6,
+              "format": "percent"
+            },
+            {
+              "key": "flow",
+              "label": "游动速度",
+              "hint": "鱼群和海龟游多快、水纹晃得多快",
+              "min": 0,
+              "max": 3,
+              "step": 0.05,
+              "default": 1,
+              "format": "times"
+            }
+          ]
+        },
+        {
+          "name": "海洋生物",
+          "params": [
+            {
+              "key": "fish",
+              "label": "鱼群",
+              "hint": "开阔水域里游着多少群小鱼",
+              "min": 0,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.5,
+              "format": "percent"
+            },
+            {
+              "key": "showTurtle",
+              "label": "显示海龟",
+              "hint": "偶尔有一只海龟从水面下慢慢游过",
+              "options": [
+                "隐藏",
+                "显示"
+              ],
+              "default": 1
+            }
+          ]
+        }
+      ],
+      "thumbSource": "custom"
+    },
+    {
+      "id": "city",
+      "adaptive": true,
+      "name": "城市",
+      "desc": "俯瞰的迷你城市，每个图标都在一小片公园里，街上车来车往，昼夜跟着时钟变化",
+      "page": "city.html",
+      "status": "ready",
+      "product": "free",
+      "thumb": "url(thumbs/city.webp?v=daed1651a5) center / cover no-repeat, radial-gradient(ellipse 20% 34% at 14% 42%, #578b4a 62%, #8fae72 66%, transparent 71%), radial-gradient(ellipse 13% 19% at 66% 58%, #578b4a 60%, #8fae72 65%, transparent 70%), repeating-linear-gradient(90deg, transparent 0 16%, #5d636b 16% 18.5%), repeating-linear-gradient(0deg, transparent 0 23%, #5d636b 23% 26%), linear-gradient(135deg, #e3c8aa 0%, #c3c9d1 35%, #d8b196 65%, #b9c3cc 100%)",
+      "groups": [
+        {
+          "name": "图标周围",
+          "params": [
+            {
+              "key": "sigma",
+              "label": "公园大小",
+              "hint": "图标所在的公园从图标往外铺多远",
+              "min": 24,
+              "max": 120,
+              "step": 1,
+              "default": 40,
+              "unit": "px"
+            }
+          ]
+        },
+        {
+          "name": "街道",
+          "params": [
+            {
+              "key": "traffic",
+              "label": "车流",
+              "hint": "街上的车有多少",
+              "min": 0,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.5,
+              "format": "percent"
+            },
+            {
+              "key": "showCars",
+              "label": "显示汽车",
+              "hint": "街上行驶的汽车和公交车",
+              "options": [
+                "隐藏",
+                "显示"
+              ],
+              "default": 1
+            }
+          ]
+        },
+        {
+          "name": "时间",
+          "params": [
+            {
+              "key": "timeMode",
+              "label": "时段",
+              "hint": "自动：跟着电脑的时钟，白天、黄昏、夜晚依次变化",
+              "options": [
+                "自动",
+                "白天",
+                "黄昏",
+                "夜晚"
+              ],
+              "default": 0
+            },
+            {
+              "key": "windows",
+              "label": "亮灯的窗户",
+              "hint": "夜晚有多少窗户亮着灯",
+              "min": 0,
+              "max": 1,
+              "step": 0.01,
+              "default": 0.55,
+              "format": "percent"
+            }
+          ]
+        }
+      ],
+      "thumbSource": "custom"
     }
   ]
 }

@@ -1,0 +1,1835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terrarium · City (prototype)</title>
+<!--
+  Terrarium · City theme (top-down miniature city, flat illustration, WebGL2)
+  - Every desktop icon sits in a green park: the park shape is the same signed-distance icon field as the
+    meadow theme (CPU field, FA/FB textures morphing with curMix), drawn per pixel in the fullscreen shader
+    (lawn, mowing stripes, curb, a footpath loop, park lamps and tree crowns read from a small cell texture).
+  - The rest of the screen is a street grid with blocks of buildings. The whole static city (roads, markings,
+    roofs, rooftop details, lamps) is rendered ONCE per field change into two cached canvases:
+      albedo  RGB = flat colours
+      lights  R = night window rank (0 = no window), G = street-lamp glow, B = cast-shadow mask
+    Buildings that touch a park are cleared (their block becomes plaza paving). Two cache sets (A/B) are
+    cross-faded while the park field morphs, so moving an icon re-shapes the city smoothly.
+  - Day / dusk / night is a colour grade in the shader (tint, shadow strength, lamp light, lit windows).
+  - Cars are a tiny CPU traffic sim on the road graph (lanes, traffic lights, turns, following distance) and
+    are drawn as instanced-style quads in a second cheap pass (no per-pixel loops over cars).
+-->
+<style>
+  :root { --taskbar: 48px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #5c6168; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; }
+  #art { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #desktop { position: fixed; left: 0; top: 0; right: 0; bottom: var(--taskbar); }
+
+  .icon {
+    position: absolute; width: 76px; padding: 4px 2px 5px;
+    display: flex; flex-direction: column; align-items: center;
+    border: 1px solid transparent; border-radius: 4px;
+    user-select: none; touch-action: none; cursor: default;
+  }
+  .icon:hover { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.24); }
+  .icon.sel { background: rgba(0,120,215,.34); border-color: rgba(140,200,255,.7); }
+  .icon.drag { opacity: .88; z-index: 10; transform: scale(1.04); }
+  .icon.settle { transition: left .22s cubic-bezier(.2,.8,.3,1), top .22s cubic-bezier(.2,.8,.3,1); }
+  .icon.born { animation: born .45s cubic-bezier(.2,.9,.3,1.2); }
+  @keyframes born { from { opacity: 0; transform: scale(.6); } }
+  .glyph { width: 48px; height: 48px; filter: drop-shadow(0 1px 1px rgba(0,0,0,.25)) drop-shadow(3px 6px 4px rgba(20,30,20,.25)); pointer-events: none; }
+  .glyph svg { width: 100%; height: 100%; display: block; }
+  .label {
+    margin-top: 3px; max-width: 72px; font-size: 12px; line-height: 15px; color: #fff; text-align: center;
+    text-shadow: 0 0 2px rgba(0,0,0,.95), 0 1px 3px rgba(0,0,0,.85);
+    word-break: break-all; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    pointer-events: none;
+  }
+
+  #taskbar {
+    position: fixed; left: 0; right: 0; bottom: 0; height: var(--taskbar);
+    background: rgba(28,32,38,.6); backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    border-top: 1px solid rgba(255,255,255,.08);
+    display: flex; align-items: center; justify-content: center; z-index: 40;
+  }
+  #taskbar .apps { display: flex; gap: 4px; }
+  #taskbar .app { width: 40px; height: 40px; border-radius: 4px; display: grid; place-items: center; }
+  #taskbar .app:hover { background: rgba(255,255,255,.08); }
+  #taskbar .app svg { width: 24px; height: 24px; }
+  #clock { position: absolute; right: 14px; color: #fff; font-size: 12px; line-height: 16px; text-align: right; }
+
+  #panel {
+    position: fixed; top: 14px; right: 14px; width: 292px; max-height: calc(100vh - var(--taskbar) - 28px); overflow: auto;
+    background: rgba(30,38,48,.78); backdrop-filter: blur(18px) saturate(1.3); -webkit-backdrop-filter: blur(18px) saturate(1.3);
+    color: #eef2f5; border: 1px solid rgba(255,255,255,.14); border-radius: 12px;
+    font-size: 12px; line-height: 1.4; box-shadow: 0 12px 32px rgba(0,0,0,.25); z-index: 50;
+  }
+  #panel.hidden { display: none; }
+  /* Wallpaper mode (?wallpaper=1, loaded by the desktop host): Windows draws the real icons and taskbar */
+  body.wall #panel, body.wall #taskbar, body.wall #desktop { display: none; }
+  /* Preview mode (?preview=1, inside the settings window): translucent boxes mark the real icon positions */
+  #ghosts { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.preview #ghosts { display: block; }
+  .ghost { position: absolute; }
+  .ghost i { position: absolute; left: 50%; top: 4px; width: 48px; height: 48px; margin-left: -24px; border-radius: 9px;
+    background: rgba(255,255,255,.88); box-shadow: 3px 6px 8px rgba(20,30,40,.28); }
+  .ghost b { position: absolute; left: 14%; right: 14%; top: 60px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.75); }
+  #panel header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 10px; }
+  #panel header b { font-size: 14px; letter-spacing: .06em; }
+  #panel header span { margin-left: 8px; opacity: .55; }
+  #panel.collapsed .body { display: none; }
+  .ibtn { background: none; border: 0; color: inherit; opacity: .6; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; }
+  .ibtn:hover { opacity: 1; }
+  #panel .body { padding: 0 14px 14px; }
+  .sec { margin-top: 12px; }
+  .sec > .t { opacity: .6; margin-bottom: 6px; }
+  .seg { display: grid; grid-template-columns: repeat(4, 1fr); background: rgba(255,255,255,.06); border-radius: 7px; padding: 2px; gap: 2px; }
+  .seg button { background: none; border: 0; color: inherit; padding: 5px 0; border-radius: 5px; cursor: pointer; font: inherit; opacity: .75; white-space: nowrap; }
+  .seg button:hover { opacity: 1; }
+  .seg button.on { background: rgba(255,255,255,.17); opacity: 1; }
+  .slider { margin-top: 9px; }
+  .slider .row { display: flex; justify-content: space-between; }
+  .slider .row span:last-child { opacity: .6; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; margin: 4px 0 0; accent-color: #f2c14e; }
+  .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; }
+  .toggles label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .toggles input { accent-color: #f2c14e; margin: 0; }
+  .btns { display: flex; gap: 6px; }
+  .btns button {
+    flex: 1; font: inherit; color: inherit; cursor: pointer; padding: 7px 0; border-radius: 7px;
+    background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.1);
+  }
+  .btns button:hover { background: rgba(255,255,255,.18); }
+  #stats { margin-top: 12px; padding: 8px 10px; border-radius: 7px; background: rgba(0,0,0,.25); font-family: Consolas, "Cascadia Mono", monospace; font-size: 11px; line-height: 1.6; color: #d8dee4; }
+  #stats .live { color: #f2c14e; }
+  .hint { margin-top: 10px; opacity: .5; font-size: 11px; line-height: 1.6; }
+  #nogl { position: fixed; inset: 0; display: none; place-items: center; color: #fff; font-size: 16px; }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<div id="desktop"></div>
+
+<div id="taskbar">
+  <div class="apps">
+    <div class="app"><svg viewBox="0 0 24 24"><rect x="2" y="2" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="12.5" y="2" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="2" y="12.5" width="9.5" height="9.5" fill="#4cc2ff"/><rect x="12.5" y="12.5" width="9.5" height="9.5" fill="#4cc2ff"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="#fff" stroke-width="2"/><path d="M15 15l5 5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v1H2z" fill="#e09b1d"/><path d="M2 9h20v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z" fill="#ffc83d"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#1b8fd6"/><path d="M6 13c1-5 11-6 12 0-3-2-8-2-9 2 0 2 2 3 4 3-4 1-7-1-7-5z" fill="#6fe37a" opacity=".9"/></svg></div>
+    <div class="app"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2.5" fill="#2b2b2b" stroke="#777"/><path d="M6 9l3 3-3 3M11 15h6" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg></div>
+  </div>
+  <div id="clock"></div>
+</div>
+
+<aside id="panel">
+  <header>
+    <div><b>Terrarium</b><span>City · prototype</span></div>
+    <div><button class="ibtn" id="collapse" title="Collapse">–</button></div>
+  </header>
+  <div class="body">
+    <div class="sec"><div class="t">Desktop layout</div>
+      <div class="seg" id="segLayout">
+        <button data-v="mine">Mine</button><button data-v="arranged">Arranged</button><button data-v="messy">Messy</button><button data-v="minimal">Minimal</button>
+      </div>
+    </div>
+    <div class="sec"><div class="t">Time of day</div>
+      <div class="seg" id="segTime">
+        <button data-v="0">Auto</button><button data-v="1">Day</button><button data-v="2">Dusk</button><button data-v="3">Night</button>
+      </div>
+    </div>
+    <div class="sec" id="sliders"></div>
+    <div class="sec toggles">
+      <label><input type="checkbox" data-key="showCars">Cars</label>
+      <label><input type="checkbox" data-key="debug">Show park edge</label>
+      <label><input type="checkbox" data-key="snap">Snap to grid</label>
+      <label><input type="checkbox" data-key="cap30">Cap 30 fps</label>
+    </div>
+    <div class="sec btns">
+      <button id="btnAdd">+ New file</button>
+      <button id="btnSeed">New city</button>
+    </div>
+    <div id="stats"></div>
+    <div class="hint">Drag icons; the parks follow them.<br>Del deletes · H hides this panel</div>
+  </div>
+</aside>
+<div id="nogl">This browser does not support WebGL2.</div>
+
+<script>
+'use strict';
+
+/* ======================================================================
+   Parameters
+   ====================================================================== */
+const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
+const STEP = 5;                 // field grid step (CSS px)
+const MORPH_MS = 1800;
+const EDGE = 10;                // park boundary sits at field value s = EDGE
+const WARP = 16;                // field warp (smaller than meadow: parks are tidy, not cloudy)
+const C0 = Math.sqrt(-Math.log(0.35));
+const TCELL = 34;               // park tree / lamp cell size (CSS px)
+
+const QS = new URLSearchParams(location.search);
+const WALL = QS.has('wallpaper');      // wallpaper mode: loaded by the desktop host, messages come from the host
+const PREVIEW = QS.has('preview');     // preview mode: thumbnail preview in the settings window (iframe)
+// Defaults must match the `default` values of the city entry in themes.json; quality is not user-facing
+const P = {
+  sigma: 40, traffic: 0.5, timeMode: 0, windows: 0.55, showCars: 1, adaptive: 1,
+  quality: 2, debug: false, snap: true, cap30: true,
+};
+const DEFAULTS = Object.assign({}, P);
+const DISPLAY_KEYS = ['showCars', 'adaptive'];           // 0 / 1 switches
+const OPTION_KEYS = { timeMode: 4 };                     // option params: integer index in [0, n)
+const pct = v => Math.round(v * 100) + '%';
+const SLIDERS = [
+  { key: 'sigma',   label: 'Park size',          min: 24, max: 120, step: 1,    fmt: v => v + ' px', act: 'field' },
+  { key: 'traffic', label: 'Traffic',            min: 0,  max: 1,   step: 0.01, fmt: pct },
+  { key: 'windows', label: 'Lit windows at night', min: 0, max: 1,  step: 0.01, fmt: pct },
+];
+
+/* ======================================================================
+   Mock desktop icons
+   ====================================================================== */
+const PAGE = '<path d="M12 4h17l9 9v29a2 2 0 0 1-2 2H12a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" fill="#fbfbfb" stroke="#c4c4c4"/><path d="M29 4v7a2 2 0 0 0 2 2h7z" fill="#dedede"/>';
+const LINES = '<path d="M24 20h10M24 25h10M24 30h10M24 35h10" stroke="#c9c9c9" stroke-width="1.6"/>';
+const badge = (color, text, size = 11) => `<rect x="4" y="21" width="19" height="19" rx="3" fill="${color}"/><text x="13.5" y="34.5" text-anchor="middle" font-family="Segoe UI,Arial" font-weight="700" font-size="${size}" fill="#fff">${text}</text>`;
+const SVG = {
+  folder: '<path d="M4 12a3 3 0 0 1 3-3h11l4 4h19a3 3 0 0 1 3 3v2H4z" fill="#e09b1d"/><path d="M4 17h40v20a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3z" fill="#ffc83d"/><path d="M4 17h40v2.5H4z" fill="#ffd978"/>',
+  docx: PAGE + LINES + badge('#185abd', 'W'),
+  xlsx: PAGE + '<path d="M24 19h11v17H24zM24 24.5h11M24 30h11M29.5 19v17" stroke="#9ac9a9" stroke-width="1.3" fill="none"/>' + badge('#107c41', 'X'),
+  pdf:  PAGE + LINES + badge('#d33a2c', 'PDF', 7.5),
+  cad:  PAGE + LINES + badge('#2a7fd4', 'DWG', 7),
+  txt:  PAGE + '<path d="M16 18h16M16 23h16M16 28h16M16 33h10" stroke="#9a9a9a" stroke-width="1.6"/>',
+  png:  PAGE + '<rect x="14" y="17" width="20" height="17" rx="1.5" fill="#8fd0f5"/><path d="M14 30l6-6 5 5 3-3 6 6v1.5a1.5 1.5 0 0 1-1.5 1.5h-17A1.5 1.5 0 0 1 14 34z" fill="#3fa35a"/><circle cx="29" cy="21.5" r="2" fill="#fff4b8"/>',
+  shot: '<rect x="3" y="13" width="42" height="25" rx="1" fill="#1d2129" stroke="#f2f2f2" stroke-width="1.5"/><rect x="6" y="16" width="14" height="3" fill="#5b8def"/><rect x="6" y="21" width="22" height="2" fill="#6c7280"/><rect x="6" y="25" width="18" height="2" fill="#6c7280"/><rect x="31" y="16" width="11" height="18" fill="#2e3440"/>',
+  zip:  PAGE + '<path d="M22 4v4h3v3h-3v3h3v3h-3v3h3v3h-3" stroke="#8a6d3b" stroke-width="2" fill="none"/><rect x="20" y="26" width="7" height="8" rx="1" fill="#8a6d3b"/>',
+  bin:  '<path d="M12 14h24l-2.5 27a3 3 0 0 1-3 2.7H17.5a3 3 0 0 1-3-2.7z" fill="rgba(215,235,250,.55)" stroke="rgba(255,255,255,.9)" stroke-width="1.2"/><path d="M10 12.5h28" stroke="rgba(255,255,255,.95)" stroke-width="2.4" stroke-linecap="round"/><path d="M19 19l1 19M24 19v19M29 19l-1 19" stroke="rgba(255,255,255,.7)" stroke-width="1.2"/>',
+  pc:   '<rect x="5" y="8" width="38" height="26" rx="2" fill="#1f8fe0" stroke="#bfe3ff" stroke-width="1.5"/><path d="M5 30h38" stroke="#0d5fa8" stroke-width="3"/><path d="M19 34l-2 6h14l-2-6z" fill="#9aa7b4"/>',
+};
+const APP_COLORS = ['#e8553e','#2f7de1','#18a058','#8b5cf6','#f59e0b','#0ea5a4','#db2777','#334155','#16a34a','#2563eb'];
+function appSVG(name) {
+  let h = 0; for (const ch of name) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return `<rect x="5" y="5" width="38" height="38" rx="9" fill="${APP_COLORS[h % APP_COLORS.length]}"/><path d="M5 14a9 9 0 0 1 9-9h20a9 9 0 0 1 9 9v6H5z" fill="#fff" opacity=".14"/>` +
+    `<text x="24" y="31.5" text-anchor="middle" font-family="Segoe UI,Arial" font-weight="700" font-size="18" fill="#fff">${[...name][0]}</text>`;
+}
+const glyphOf = (name, type) => type === 'app' ? appSVG(name) : SVG[type];
+
+const FILES = [
+  ['Recycle Bin','bin'], ['Projects','folder'], ['Quote 2026.xlsx','xlsx'], ['Product spec.docx','docx'],
+  ['Screenshot_0927.png','png'], ['Contract scan.pdf','pdf'], ['New folder','folder'], ['Design assets','folder'],
+  ['Travel photos','folder'], ['Installer.zip','zip'], ['Meeting notes.docx','docx'], ['Wallpaper ideas','folder'],
+  ['Weekly report.xlsx','xlsx'], ['Sketch.png','png'], ['Old backup','folder'], ['Photo.png','png'], ['Manual.pdf','pdf'], ['Resume.docx','docx'],
+  ['Expenses.xlsx','xlsx'], ['Backup.zip','zip'], ['Reference.png','png'], ['Downloads','folder'], ['Stickers.png','png'], ['Payslip.xlsx','xlsx'],
+  ['Lease.pdf','pdf'], ['Journal.docx','docx'], ['Desktop.png','png'],
+];
+const EXTRA = [
+  ['New Text Document.txt','txt'], ['New folder (2)','folder'], ['Invoice.pdf','pdf'], ['Export.xlsx','xlsx'],
+  ['Screenshot_0928.png','png'], ['Memo.txt','txt'], ['Archive.zip','zip'], ['New folder (3)','folder'],
+];
+const APPS = ['Recycle Bin','This PC','Mail','Slack','Teams','Zoom','Spotify','CapCut','Photoshop','Obsidian','VS Code','Krita',
+  'AutoCAD','Rhino','KeyShot','Dropbox','Chrome','Blender','Figma','Notion','Discord','Steam','Eagle','OBS','Kimi','PureRef','Recorder','NX 12.0','MarkText','Codex'];
+const MISC = [['projects','folder'],['Games','folder'],['todolist','folder'],['OKR.xlsx','xlsx'],['Fixed costs.xlsx','xlsx'],
+  ['pdfarrange','app'],['stp.log','txt'],['part.stp','txt'],['part.3dm','png'],['Preview','folder']];
+const RIGHT = [['plot.log','txt'],['Tools','folder'],['archive.rar','zip'],['1685x128.png','png'],['image.jpg','png'],['0914.png','png'],
+  ['image 2.jpg','png'],['images.png','png'],['Contents.docx','docx'],['api.txt','txt'],['c4ef.png','png'],['0918.png','png'],
+  ['Board.pdf','pdf'],['recommend.txt','txt'],['button.stp','txt'],['New Text (2).txt','txt'],['ugstep21','txt'],['New Text (3).txt','txt'],
+  ['Plan.txt','txt'],['image 3.jpg','png'],['New DOCX.docx','docx'],['SEO.txt','txt'],['resend.txt','txt'],['Product intro.txt','txt'],
+  ['USER.pdf','pdf'],['New Text.txt','txt'],['Chair.pur','png'],['PAP-20.pdf','pdf'],['Slides.pptx','pdf'],['Issues.txt','txt']];
+function mineCells() {
+  const out = []; let a = 0, m = 0, rgt = 0, sh = 0;
+  for (let c = 0; c < 3; c++) for (let r = 0; r < 10; r++) {
+    const name = APPS[a++];
+    out.push([c, r, name, name === 'Recycle Bin' ? 'bin' : name === 'This PC' ? 'pc' : 'app']);
+  }
+  for (let r = 0; r < 10; r++) out.push([3, r, ...MISC[m++]]);
+  for (let r = 0; r < 5; r++) out.push([5, r, `Part ${r + 1}.dwg`, 'cad']);
+  out.push([6, 0, 'leg-test.bak', 'txt']);
+  for (const [c, r] of [[6,4],[6,5],[6,6],[6,7],[6,8],[7,3],[7,4],[7,5],[7,6],[7,7],[8,4],[8,5],[8,6],[9,2],[9,3],[9,4],[9,5],[9,6]])
+    out.push([c, r, `ScreenShot ${++sh}.png`, 'shot']);
+  for (const [c, r] of [[11,1],[11,2],[11,3],[12,1],[12,2],[12,3],[12,4],[13,1],[13,2],[13,3],[13,4],[14,1],[14,3],[14,4],[15,1],[15,6],
+    [16,4],[16,6],[17,4],[17,5],[17,6],[17,7],[19,4],[19,5],[19,8],[20,0],[20,4],[20,6],[21,0],[21,5],[21,6]]) {
+    const f = RIGHT[rgt++ % RIGHT.length]; out.push([c, r, f[0], f[1]]);
+  }
+  return out;
+}
+
+/* ======================================================================
+   CPU noise + tileable noise texture
+   ====================================================================== */
+let seed = (Math.random() * 1e6) | 0;
+function hash2(x, y, k = 0) {
+  let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(seed + k, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x, y, k = 0) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy, k), b = hash2(ix + 1, iy, k), c = hash2(ix, iy + 1, k), d = hash2(ix + 1, iy + 1, k);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+function fbm(x, y, k = 0) {
+  let a = 0.5, s = 0;
+  for (let i = 0; i < 4; i++) { s += a * vnoise(x, y, k + i * 7); x = x * 2.03 + 17.1; y = y * 2.03 + 17.1; a *= 0.5; }
+  return s;
+}
+function tileNoise(x, y, px, py, k) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const m = (v, p) => ((v % p) + p) % p;
+  const x0 = m(ix, px), x1 = m(ix + 1, px), y0 = m(iy, py), y1 = m(iy + 1, py);
+  const a = hash2(x0, y0, k), b = hash2(x1, y0, k), c = hash2(x0, y1, k), d = hash2(x1, y1, k);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+function tileFbm(u, v, periods, k) {
+  let s = 0, w = 0.5, tw = 0;
+  for (let i = 0; i < periods.length; i++) { s += w * tileNoise(u * periods[i], v * periods[i], periods[i], periods[i], k + i * 13); tw += w; w *= 0.5; }
+  return s / tw;
+}
+function makeNoiseImage() {
+  const S = 128, d = new Uint8Array(S * S * 4);
+  const chans = [[4, 8, 16], [8, 16, 32], [4, 8], [16, 32, 64]];
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = x / S, v = y / S, i = (y * S + x) * 4;
+    for (let c = 0; c < 4; c++) d[i + c] = Math.min(Math.max((tileFbm(u, v, chans[c], 100 + c * 50) - 0.5) * 1.9 + 0.5, 0), 1) * 255;
+  }
+  return { S, d };
+}
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+const sstep = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0), 1); return t * t * (3 - 2 * t); };
+const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+
+/* ======================================================================
+   Park field (CPU): s = signed distance-ish to the park boundary (s < EDGE inside a park)
+   ====================================================================== */
+let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1, NZ = null;
+function buildNoise() {
+  const N = Gw * Gh;
+  NZ = { wx: new Float32Array(N), wy: new Float32Array(N) };
+  for (let gy = 0; gy < Gh; gy++) for (let gx = 0; gx < Gw; gx++) {
+    const i = gy * Gw + gx, x = gx * STEP, y = gy * STEP;
+    NZ.wx[i] = fbm(x * 0.0035, y * 0.0035, 1) - 0.47;
+    NZ.wy[i] = fbm(x * 0.0035, y * 0.0035, 2) - 0.47;
+  }
+}
+let fieldMs = 0;
+function computeField(rects) {
+  const t0 = performance.now();
+  const N = Gw * Gh, f1 = new Float32Array(N);
+  const sig = P.sigma, is1 = 1 / (sig * sig);
+  const wa = WARP * 2.2, wmax = wa * 0.5;
+  for (const r of rects) {
+    const R = 5.5 * sig + Math.max(r.hw, r.hh) * 0.5 + wmax;
+    const gx0 = Math.max(0, Math.floor((r.cx - R) / STEP)), gx1 = Math.min(Gw - 1, Math.ceil((r.cx + R) / STEP));
+    const gy0 = Math.max(0, Math.floor((r.cy - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((r.cy + R) / STEP));
+    const chw = r.hw * 0.5, chh = r.hh * 0.5;
+    for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+      const i = gy * Gw + gx;
+      const qx = gx * STEP + NZ.wx[i] * wa, qy = gy * STEP + NZ.wy[i] * wa;
+      let dx = Math.abs(qx - r.cx) - chw, dy = Math.abs(qy - r.cy) - chh;
+      if (dx < 0) dx = 0; if (dy < 0) dy = 0;
+      f1[i] += Math.exp(-(dx * dx + dy * dy) * is1);
+    }
+  }
+  const s = new Float32Array(N), fMin = Math.exp(-30);
+  for (let i = 0; i < N; i++) {
+    const g = Math.log(Math.max(f1[i], fMin));
+    s[i] = sig * (Math.sqrt(Math.max(-g, 0)) - C0) - sig * 0.6 * Math.max(g, 0);
+  }
+  fieldMs = performance.now() - t0;
+  return { s };
+}
+function sampleArr(a, x, y) {
+  const fx = Math.min(Math.max(x / STEP, 0), Gw - 1.001), fy = Math.min(Math.max(y / STEP, 0), Gh - 1.001);
+  const ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy, i = iy * Gw + ix;
+  return (a[i] * (1 - tx) + a[i + 1] * tx) * (1 - ty) + (a[i + Gw] * (1 - tx) + a[i + Gw + 1] * tx) * ty;
+}
+const ringInset = () => clamp(0.4 * (EDGE + P.sigma * C0), 14, 34);   // footpath loop: this far inside the park edge
+
+/* ======================================================================
+   Shaders
+   ====================================================================== */
+const VS = `#version 300 es
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const FS = `#version 300 es
+precision highp float;
+uniform sampler2D uNoise, uFA, uFB, uCA, uCB, uLA, uLB;
+uniform highp sampler2D uTrees;    // park trees / lamps: one per cell, (x, y, radius, kind) — kind < 1 tree hue, kind 2 lamp
+uniform sampler2D uPath;           // footpath mask along each street centre line (rows: vertical roads, then horizontal)
+uniform float uPathN;              // samples per row (4 px apart)
+uniform vec2 uRes, uPx, uGrid;
+uniform ivec2 uTGrid;
+uniform float uScale, uSeed, uStep, uMix, uCMix, uTime, uDebug, uEdge, uSigC, uRing, uTCell;
+uniform float uDusk, uWin, uLampK, uShStr;
+uniform vec3 uTint;
+uniform float uRV[32], uRH[32];    // road centre lines (vertical x, horizontal y): the park footpaths continue them
+uniform int uNV, uNH;
+out vec4 o;
+
+const vec3 LAWN = vec3(0.335, 0.525, 0.285), LAWN2 = vec3(0.300, 0.490, 0.265);  // mid green: white icon labels stay readable
+const vec3 PATH = vec3(0.74, 0.69, 0.57);
+const vec3 CURB = vec3(0.86, 0.84, 0.79);
+const vec3 TREE_A = vec3(0.20, 0.40, 0.21), TREE_B = vec3(0.27, 0.47, 0.22), TREE_C = vec3(0.17, 0.35, 0.25);
+const vec3 POST = vec3(0.24, 0.25, 0.27);
+const vec3 SHCOL = vec3(0.55, 0.57, 0.72);       // shadows: blue-ish, multiplied
+const vec3 LAMP = vec3(1.0, 0.76, 0.46);
+const vec3 WIN_W = vec3(1.0, 0.80, 0.48), WIN_C = vec3(0.78, 0.88, 1.0);
+const vec2 TREE_SH = vec2(4.0, 5.2);
+
+float hash2(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float ss(float a, float b, float x) { float t = clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
+vec4 N(vec2 p, float scale) { return texture(uNoise, p / scale + uSeed * 0.013); }
+float fieldS(sampler2D t, vec2 p) { return texture(t, (p / uStep + 0.5) / uGrid).r; }
+
+// A window is lit when its rank is under the density; every minute or so a few windows near the threshold switch
+float winOn(float r) {
+  if (r < 0.5 / 255.0) return 0.0;
+  float j = hash2(vec2(r * 255.0, floor(uTime / 60.0 + r * 37.0)));
+  float v = max(r + 0.12 * (j - 0.5), 0.01);
+  return step(v, uWin);
+}
+
+void main() {
+  ivec2 ip = ivec2(int(gl_FragCoord.x), int(uPx.y) - 1 - int(gl_FragCoord.y));
+  vec2 p = vec2(gl_FragCoord.x, uPx.y - gl_FragCoord.y) / uScale;
+
+  // ---------- cached city (two cache sets cross-fade while the parks morph) ----------
+  vec4 ca = texelFetch(uCA, ip, 0), cb = texelFetch(uCB, ip, 0);
+  vec4 la = texelFetch(uLA, ip, 0), lb = texelFetch(uLB, ip, 0);
+  vec3 alb = mix(ca.rgb, cb.rgb, uCMix);
+  float shad = mix(la.b, lb.b, uCMix);
+  float glow = mix(la.g, lb.g, uCMix);
+  float win = mix(winOn(la.r), winOn(lb.r), uCMix);
+  float wr = max(la.r, lb.r);
+
+  // ---------- parks around the icons ----------
+  float s = mix(fieldS(uFA, p), fieldS(uFB, p), uMix);
+  if (s < uEdge + 20.0) {
+    float e = s - uEdge;
+    float dI = s + uSigC;                                  // roughly the distance from the icon boxes
+    vec4 nz = N(p, 520.0);
+    vec3 lawn = mix(LAWN, LAWN2, ss(0.3, 0.75, nz.r));
+    float stripe = abs(fract((p.x + p.y * 0.42) / 46.0) * 2.0 - 1.0);       // soft mowing stripes
+    lawn *= 1.0 + 0.045 * (ss(0.35, 0.65, stripe) - 0.5);
+    lawn *= 1.0 - 0.11 * ss(-11.0, -1.0, e);                                // a little darker along the curb
+    // footpaths: the streets continue through the park as gravel paths, stopping short of the icons
+    float spoke = 0.0;
+    if (dI > 14.0) {
+      float dv = 1e9, dh = 1e9; int kv = 0, kh = 0;
+      for (int k = 0; k < 32; k++) { if (k >= uNV) break; float d = abs(p.x - uRV[k]); if (d < dv) { dv = d; kv = k; } }
+      for (int k = 0; k < 32; k++) { if (k >= uNH) break; float d = abs(p.y - uRH[k]); if (d < dh) { dh = d; kh = k; } }
+      float rows = float(uNV + uNH);
+      float mv = texture(uPath, vec2((p.y / 4.0 + 0.5) / uPathN, (float(kv) + 0.5) / rows)).r;
+      float mh = texture(uPath, vec2((p.x / 4.0 + 0.5) / uPathN, (float(uNV + kh) + 0.5) / rows)).r;
+      spoke = max((1.0 - ss(2.3, 3.3, dv)) * ss(0.35, 0.65, mv), (1.0 - ss(2.3, 3.3, dh)) * ss(0.35, 0.65, mh));
+    }
+    float pathM = spoke;
+    vec3 pc = PATH * (0.96 + 0.07 * nz.g);
+    lawn = mix(lawn, pc, pathM);
+    float curbM = (1.0 - ss(1.3, 2.3, e)) * (1.0 - spoke);
+    float lawnM = 1.0 - ss(-1.0, 0.0, e);
+    alb = mix(alb, CURB, curbM);
+    alb = mix(alb, lawn, lawnM);
+    win *= 1.0 - max(curbM, lawnM);
+
+    // trees and lamps (CPU places them in cells; only this cell and its neighbours can reach a pixel)
+    ivec2 c0 = ivec2(floor(p / uTCell)) + 1;
+    float tsh = 0.0, post = 0.0, pg = 0.0;
+    vec4 fr = vec4(0.0, -1e9, 0.0, 0.0);
+    for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+      ivec2 c = c0 + ivec2(i, j);
+      if (c.x < 0 || c.y < 0 || c.x >= uTGrid.x || c.y >= uTGrid.y) continue;
+      vec4 t = texelFetch(uTrees, c, 0);
+      if (t.z <= 0.0) continue;
+      vec2 d = p - t.xy;
+      if (t.w >= 2.0) {
+        float l = length(d);
+        float q = max(1.0 - l / 34.0, 0.0);
+        pg += q * q;
+        post = max(post, 1.0 - ss(1.2, 2.2, l));
+        tsh = max(tsh, 0.6 * (1.0 - ss(0.8, 1.8, length(d - vec2(1.6, 2.1)))));
+        continue;
+      }
+      tsh = max(tsh, 1.0 - ss(-1.0, 1.0, length(d - TREE_SH * (0.55 + t.z / 22.0)) - t.z));
+      if (length(d) - t.z < 1.0 && t.y > fr.y) fr = t;
+    }
+    float crownA = 0.0;
+    if (fr.z > 0.0) {
+      float dc = length(p - fr.xy) - fr.z;
+      crownA = 1.0 - ss(-0.8, 0.8, dc);
+      vec3 tc = fr.w < 0.33 ? TREE_A : fr.w < 0.66 ? TREE_B : TREE_C;
+      float hl = 1.0 - ss(-0.8, 0.8, length(p - fr.xy + fr.z * vec2(0.24, 0.30)) - fr.z * 0.70);
+      tc = mix(tc * 0.92, tc * 1.30 + vec3(0.02, 0.035, 0.0), hl);           // flat two-tone crown, lit from the top left
+      alb = mix(alb, tc, crownA);
+    }
+    shad = max(shad, tsh * 0.8 * (1.0 - crownA));
+    alb = mix(alb, POST, post);
+    glow += pg * 0.85;
+  }
+
+  // ---------- light: day / dusk / night grade ----------
+  vec3 col = alb * mix(vec3(1.0), SHCOL, clamp(shad, 0.0, 1.0) * uShStr);
+  col *= uTint * (1.0 + uDusk * 0.12 * (0.45 - (p.x / uRes.x * 0.6 + p.y / uRes.y * 0.4)));
+  col += (mix(alb, vec3(dot(alb, vec3(0.3, 0.5, 0.2))), 0.45) * 0.9 + 0.05) * LAMP * glow * uLampK;   // warm pools; lawn not too green
+  vec3 wc = fract(wr * 255.0 * 0.618) < 0.3 ? WIN_C : WIN_W;
+  col = mix(col, wc * (0.80 + 0.20 * fract(wr * 97.0)), win);
+  col *= 1.0 + (hash2(floor(p * uScale)) - 0.5) * 0.022;                   // a hint of paper grain
+  if (uDebug > 0.5) col = mix(col, vec3(0.9, 0.15, 0.15), 1.0 - ss(0.0, 1.5, abs(s - uEdge)));
+  o = vec4(col, 1.0);
+}`;
+
+// Cars: one quad per car part (shadow, body, headlight beam), positions computed on the CPU each frame
+const CAR_VS = `#version 300 es
+in vec2 aPos; in vec2 aL; in vec4 aCol; in vec3 aMeta;
+uniform vec2 uRes;
+out vec2 vL; out vec4 vCol; out vec3 vMeta;
+void main() {
+  vL = aL; vCol = aCol; vMeta = aMeta;
+  vec2 c = aPos / uRes * 2.0 - 1.0;
+  gl_Position = vec4(c.x, -c.y, 0.0, 1.0);
+}`;
+const CAR_FS = `#version 300 es
+precision highp float;
+in vec2 vL; in vec4 vCol; in vec3 vMeta;
+uniform vec3 uTint;
+uniform float uNight, uScale, uShStr;
+out vec4 o;
+float rbox(vec2 p, vec2 b, float r) { vec2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
+void main() {
+  float kind = vMeta.x; vec2 sz = vMeta.yz; float A = vCol.a;
+  if (kind < 0.5) {                                  // soft shadow to the bottom right
+    float d = rbox(vL, sz * 0.5, 2.6);
+    float a = (1.0 - smoothstep(-1.3, 1.3, d)) * 0.34 * uShStr * A;
+    o = vec4(0.0, 0.0, 0.02 * a, a);
+    return;
+  }
+  if (kind > 1.5) {                                  // headlight beam (additive: alpha 0 with premultiplied blending)
+    float along = vL.x / sz.x + 0.5;
+    float spread = mix(0.3, 1.0, along);
+    float lat = abs(vL.y) / (sz.y * 0.5 * spread);
+    float I = pow(max(1.0 - along, 0.0), 1.5) * (1.0 - smoothstep(0.45, 1.0, lat)) * uNight * 0.75 * A;
+    o = vec4(vec3(1.0, 0.86, 0.62) * I, 0.0);
+    return;
+  }
+  vec2 hb = sz * 0.5;
+  float d = rbox(vL, hb, min(2.6, hb.y * 0.6));
+  float aa = 0.75 / uScale;
+  float a = 1.0 - smoothstep(-aa, aa, d);
+  if (a <= 0.0) discard;
+  vec2 q = vL / hb;
+  vec3 c = vCol.rgb;
+  vec3 glass = vec3(0.17, 0.21, 0.27);
+  bool bus = sz.x > 22.0;
+  if (!bus) {
+    if (q.x > 0.12 && q.x < 0.48 && abs(q.y) < 0.74) c = glass;                       // windshield
+    else if (q.x > -0.68 && q.x < -0.48 && abs(q.y) < 0.70) c = glass;                // rear window
+    else if (q.x >= -0.48 && q.x <= 0.12 && abs(q.y) < 0.66) c = c * 1.08 + 0.035;    // roof
+  } else {
+    if (q.x > 0.84 && abs(q.y) < 0.80) c = glass;
+    else if (abs(q.y) > 0.62 && abs(q.y) < 0.86 && q.x > -0.86 && q.x < 0.76 && fract(q.x * 4.0) < 0.78) c = glass;
+    else if (abs(q.y) < 0.5 && (abs(q.x - 0.25) < 0.08 || abs(q.x + 0.45) < 0.08)) c *= 0.8;   // roof vents
+  }
+  float em = 0.0; vec3 emc = vec3(0.0);
+  if (q.x > 0.84 && abs(q.y) > 0.38 && abs(q.y) < 0.86) { c = vec3(0.98, 0.95, 0.82); em = uNight; emc = vec3(1.0, 0.93, 0.72); }
+  if (q.x < -0.86 && abs(q.y) > 0.38 && abs(q.y) < 0.86) { c = vec3(0.70, 0.13, 0.12); em = uNight * 0.9; emc = vec3(1.0, 0.2, 0.14); }
+  c *= 1.0 - 0.26 * smoothstep(-1.1, -0.2, d);       // darker rim
+  vec3 col = mix(c * uTint, emc, em);
+  o = vec4(col * a * A, a * A);
+}`;
+
+/* ======================================================================
+   WebGL
+   ====================================================================== */
+const cv = document.getElementById('art');
+const gl = cv.getContext('webgl2', { antialias: false });
+if (!gl) document.getElementById('nogl').style.display = 'grid';
+function program(vs, fs) {
+  const mk = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); throw new Error('shader'); }
+    return s;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, mk(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) console.error(gl.getProgramInfoLog(p));
+  const U = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i).name.replace(/\[0\]$/, ''); U[nm] = gl.getUniformLocation(p, nm); }
+  return { p, U };
+}
+const PR = program(VS, FS);
+const CPR = program(CAR_VS, CAR_FS);
+const emptyVAO = gl.createVertexArray();
+const carVAO = gl.createVertexArray(), carBuf = gl.createBuffer();
+gl.bindVertexArray(carVAO);
+gl.bindBuffer(gl.ARRAY_BUFFER, carBuf);
+{
+  const F = 4, stride = 11 * F;
+  const attr = (name, size, off) => { const l = gl.getAttribLocation(CPR.p, name); if (l < 0) return; gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, gl.FLOAT, false, stride, off * F); };
+  attr('aPos', 2, 0); attr('aL', 2, 2); attr('aCol', 4, 4); attr('aMeta', 3, 8);
+}
+gl.bindVertexArray(emptyVAO);
+
+function makeTex(filter) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+let noiseTex = null;
+function buildNoiseTex() {
+  const { S, d } = makeNoiseImage();
+  noiseTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, noiseTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, S, S, 0, gl.RGBA, gl.UNSIGNED_BYTE, d);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+}
+const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+function toHalf(v) {
+  f32[0] = v; const x = u32[0];
+  const sign = (x >>> 16) & 0x8000, e = ((x >>> 23) & 0xff) - 112, m = x & 0x7fffff;
+  if (e <= 0) return sign;
+  if (e >= 31) return sign | 0x7c00;
+  return sign | (e << 10) | (m >>> 13);
+}
+// Two park-field textures (from -> to); each one has its own cached city (albedo + lights) rendered for it
+const ftex = [null, null], cityTex = [null, null], lightTex = [null, null];
+let fromI = 0, toI = 0, morphT0 = -1e9, morphDur = MORPH_MS, FA = null, FB = null;
+function allocField() {
+  for (let i = 0; i < 2; i++) {
+    if (ftex[i]) gl.deleteTexture(ftex[i]);
+    ftex[i] = makeTex(gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, Gw, Gh, 0, gl.RED, gl.HALF_FLOAT, null);
+    if (!cityTex[i]) { cityTex[i] = makeTex(gl.NEAREST); lightTex[i] = makeTex(gl.NEAREST); }
+  }
+}
+function uploadField(i, Fd) {
+  const d = new Uint16Array(Gw * Gh);
+  for (let k = 0; k < d.length; k++) d[k] = toHalf(Fd.s[k]);
+  gl.bindTexture(gl.TEXTURE_2D, ftex[i]);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Gw, Gh, gl.RED, gl.HALF_FLOAT, d);
+}
+
+const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2 - 4, hh: ic.h / 2 - 2 }));
+// The cached city is tied to a field: cacheOK = false (resize, share snapshot) re-renders both sets on the next draw
+let cacheOK = false, cacheMs = 0;
+function commit(fromEmpty = false) {
+  const nf = computeField(P.adaptive ? iconRects() : []);
+  const target = 1 - toI;
+  if (fromEmpty) { FA = computeField([]); uploadField(toI, FA); renderCity(toI, FA); }
+  else FA = FB;
+  FB = nf;
+  uploadField(target, FB);
+  renderCity(target, FB);
+  fromI = toI; toI = target;
+  morphT0 = performance.now();
+  morphDur = fromEmpty ? 2600 : MORPH_MS;
+  curMix = 0;
+  updateRoadsOpen();
+  treesDirty = true;
+}
+function refresh() {
+  FA = FB = computeField(P.adaptive ? iconRects() : []);
+  uploadField(toI, FB);
+  renderCity(toI, FB);
+  fromI = toI; morphT0 = -1e9; curMix = 1;
+  updateRoadsOpen();
+  treesDirty = true;
+}
+let curMix = 1;
+const curS = (x, y) => FB ? sampleArr(FA.s, x, y) * (1 - curMix) + sampleArr(FB.s, x, y) * curMix : 999;
+
+/* ======================================================================
+   City layout (from the seed): street grid, blocks, buildings, lamps, street trees
+   ====================================================================== */
+let CITY = null;
+const SIDEWALK = 7;
+const ROOF_WARM = ['#ead9c2', '#e3c8aa', '#d8b196', '#cf9d84', '#e6d0a9', '#d9c4a2', '#c8ae93', '#e9c9b1'];
+const ROOF_NEUTRAL = ['#ddd9d0', '#d0cbc1', '#c5c1b9', '#e6e2d8', '#cdc6b6'];
+const ROOF_COOL = ['#b9c3cc', '#a9b6c2', '#9aaab8', '#c3c9d1', '#b2bcc0', '#a7b8b1', '#b9b2c6'];
+const CAR_COLS = ['#f3f0e8', '#e9e5dc', '#c8cdd4', '#cf5a49', '#3f6fb5', '#f2c14e', '#3a9f96', '#4a4f5a', '#e5884a', '#79a0c9', '#8d5f97', '#f3f0e8', '#c8cdd4'];
+const BUS_COLS = ['#e8b84a', '#4a8ad4', '#d6574a', '#3a9f96'];
+const hexRGB = h => { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
+const rgb = (c, k = 1, add = 0) => `rgb(${clamp(Math.round(c[0] * k + add), 0, 255)},${clamp(Math.round(c[1] * k + add), 0, 255)},${clamp(Math.round(c[2] * k + add), 0, 255)})`;
+
+function genCity() {
+  const R = mulberry32((seed * 2654435761 ^ 0x5bd1e995) >>> 0);
+  const roads = (len, sp0, sp1) => {
+    const pos = [], wid = [];
+    let x = -40 - R() * 60;
+    for (;;) {
+      pos.push(x); wid.push(R() < 0.3 ? 30 : 22);
+      if (x > len + 40) break;
+      x += sp0 + R() * (sp1 - sp0);
+    }
+    return { pos, wid };
+  };
+  const V = roads(W, 175, 290), Hh = roads(H, 140, 230);
+  const C = { vx: V.pos, vw: V.wid, hy: Hh.pos, hw: Hh.wid, blocks: [], lamps: [], trees: [], loff: [], manholes: [] };
+  const dcx = W * (0.3 + 0.4 * R()), dcy = H * (0.3 + 0.4 * R()), dR = Math.max(W, H) * 0.42;
+  for (let i = 0; i < C.vx.length; i++) { C.loff.push([]); for (let j = 0; j < C.hy.length; j++) C.loff[i].push(R() * 16); }
+  // blocks
+  for (let i = 0; i + 1 < C.vx.length; i++) for (let j = 0; j + 1 < C.hy.length; j++) {
+    const x0 = C.vx[i] + C.vw[i] / 2, x1 = C.vx[i + 1] - C.vw[i + 1] / 2;
+    const y0 = C.hy[j] + C.hw[j] / 2, y1 = C.hy[j + 1] - C.hw[j + 1] / 2;
+    const lot = { x: x0 + SIDEWALK, y: y0 + SIDEWALK, w: x1 - x0 - 2 * SIDEWALK, h: y1 - y0 - 2 * SIDEWALK };
+    if (lot.w < 20 || lot.h < 20) continue;
+    const r = R(), blk = { x0, y0, x1, y1, lot, type: r < 0.035 ? 'green' : r < 0.09 ? 'parking' : 'build', bld: [], seed: (R() * 4294967296) >>> 0 };
+    if (blk.type === 'build') {
+      const cen = Math.exp(-((lot.x + lot.w / 2 - dcx) ** 2 + (lot.y + lot.h / 2 - dcy) ** 2) / (dR * dR));
+      const leaves = [];
+      const split = (x, y, w, h, depth) => {
+        const canV = w > 64, canH = h > 64;
+        if ((!canV && !canH) || depth > 5 || (Math.max(w, h) < 100 && R() < 0.45)) { leaves.push({ x, y, w, h }); return; }
+        const vert = canV && (!canH || w > h * (0.7 + R() * 0.6));
+        const gap = R() < 0.35 ? 3 + R() * 3 : 0;
+        const L = vert ? w : h, a = clamp(L * (0.3 + R() * 0.4), 30, L - 30);
+        if (vert) { split(x, y, a - gap / 2, h, depth + 1); split(x + a + gap / 2, y, w - a - gap / 2, h, depth + 1); }
+        else { split(x, y, w, a - gap / 2, depth + 1); split(x, y + a + gap / 2, w, h - a - gap / 2, depth + 1); }
+      };
+      split(lot.x, lot.y, lot.w, lot.h, 0);
+      for (const lf of leaves) {
+        if (R() < 0.05) { blk.bld.push(Object.assign(lf, { kind: 'yard', seed: (R() * 4294967296) >>> 0 })); continue; }
+        const ht = clamp(3 + 21 * Math.pow(R(), 1.5) * (0.45 + 0.85 * cen), 3, 26);
+        const pal = ht > 13 ? (R() < 0.65 ? ROOF_COOL : ROOF_NEUTRAL) : (R() < 0.58 ? ROOF_WARM : R() < 0.7 ? ROOF_NEUTRAL : ROOF_COOL);
+        blk.bld.push(Object.assign(lf, { kind: 'roof', ht, col: hexRGB(pal[Math.floor(R() * pal.length)]), seed: (R() * 4294967296) >>> 0 }));
+      }
+    }
+    C.blocks.push(blk);
+  }
+  // lamps along both sidewalks, street trees on some streets, a few manholes
+  const along = (ax, ln) => {
+    const cr = ax === 0 ? C.vx : C.hy, cw = ax === 0 ? C.vw : C.hw;
+    const rc = ax === 0 ? C.hy[ln] : C.vx[ln], rw = ax === 0 ? C.hw[ln] : C.vw[ln];
+    const treesHere = R() < 0.4;
+    for (let k = 0; k + 1 < cr.length; k++) {
+      const a = cr[k] + cw[k] / 2 + 16, b = cr[k + 1] - cw[k + 1] / 2 - 16;
+      if (b <= a) continue;
+      for (const side of [-1, 1]) {
+        const off = rc + side * (rw / 2 + 2.6), ph = side > 0 ? 0 : 0.5;
+        const nL = Math.max(1, Math.round((b - a) / 74));
+        for (let q = 0; q < nL; q++) {
+          const t = a + (b - a) * (q + 0.25 + ph * 0.5) / nL;
+          C.lamps.push(ax === 0 ? [t, off] : [off, t]);
+        }
+        if (treesHere) {
+          const toff = rc + side * (rw / 2 + 4);
+          for (let t = a + 8 + R() * 10; t < b - 6; t += 21 + R() * 8) {
+            if (R() < 0.12) continue;
+            C.trees.push([ax === 0 ? t : toff, ax === 0 ? toff : t, 4.2 + R() * 1.8, R()]);
+          }
+        }
+      }
+      if (R() < 0.5) { const t = a + R() * (b - a); C.manholes.push(ax === 0 ? [t, rc + (R() - 0.5) * rw * 0.5] : [rc + (R() - 0.5) * rw * 0.5, t]); }
+    }
+  };
+  for (let j = 0; j < C.hy.length; j++) along(0, j);
+  for (let i = 0; i < C.vx.length; i++) along(1, i);
+  // road segments for the traffic: ax 0 = horizontal road (index j, segment k between vertical roads k and k+1)
+  C.segs = [];
+  for (let j = 0; j < C.hy.length; j++) for (let k = 0; k + 1 < C.vx.length; k++) C.segs.push({ ax: 0, ln: j, k, len: C.vx[k + 1] - C.vx[k] });
+  for (let i = 0; i < C.vx.length; i++) for (let k = 0; k + 1 < C.hy.length; k++) C.segs.push({ ax: 1, ln: i, k, len: C.hy[k + 1] - C.hy[k] });
+  C.open = [C.hy.map(() => new Uint8Array(C.vx.length)), C.vx.map(() => new Uint8Array(C.hy.length))];
+  C.openLen = 0;
+  CITY = C;
+  cars.length = 0;
+}
+
+/* ======================================================================
+   City cache: render once per field into 2D canvases, upload as textures
+   ====================================================================== */
+let albCv = null, litCv = null, shCv = null, albCtx = null, litCtx = null, shCtx = null, plazaPat = null, plazaPatScale = 0;
+function ensureCanvases(w, h) {
+  if (!albCv) {
+    albCv = document.createElement('canvas'); litCv = document.createElement('canvas'); shCv = document.createElement('canvas');
+    albCtx = albCv.getContext('2d', { alpha: false }); litCtx = litCv.getContext('2d', { alpha: false }); shCtx = shCv.getContext('2d');
+  }
+  for (const c of [albCv, litCv, shCv]) if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+}
+function makePlazaPattern(s) {
+  const T = 14, c = document.createElement('canvas');
+  c.width = c.height = Math.max(2, Math.round(T * s));
+  const x = c.getContext('2d');
+  x.scale(c.width / T, c.height / T);
+  x.fillStyle = '#8fae72'; x.fillRect(0, 0, T, T);                       // cleared lots: soft, unmown green
+  x.fillStyle = '#87a76b'; x.fillRect(2, 3, 1, 1); x.fillRect(9, 1, 1, 1); x.fillRect(5, 9, 1, 1); x.fillRect(11, 11, 1, 1);
+  x.fillStyle = '#96b479'; x.fillRect(6, 5, 1, 1); x.fillRect(1, 12, 1, 1); x.fillRect(12, 6, 1, 1);
+  const p = albCtx.createPattern(c, 'repeat');
+  p.setTransform(new DOMMatrix([T / c.width, 0, 0, T / c.height, 0, 0]));
+  return p;
+}
+function minS(Fd, x, y, w, h) {
+  if (!Fd) return 999;
+  let m = 1e9;
+  const nx = Math.max(1, Math.ceil(w / 10)), ny = Math.max(1, Math.ceil(h / 10));
+  for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) m = Math.min(m, sampleArr(Fd.s, x + w * i / nx, y + h * j / ny));
+  return m;
+}
+const SHADOW_DIR = [0.62, 0.80];
+function renderCity(idx, Fd) {
+  if (!CITY) return;
+  const t0 = performance.now();
+  const s = cv._scale, cw = cv.width, ch = cv.height;
+  ensureCanvases(cw, ch);
+  if (plazaPatScale !== s) { plazaPat = makePlazaPattern(s); plazaPatScale = s; }
+  const A = albCtx, L = litCtx, S = shCtx, C = CITY;
+  A.setTransform(1, 0, 0, 1, 0, 0); L.setTransform(1, 0, 0, 1, 0, 0); S.setTransform(1, 0, 0, 1, 0, 0);
+  A.globalCompositeOperation = 'source-over'; L.globalCompositeOperation = 'source-over'; S.globalCompositeOperation = 'source-over';
+  A.fillStyle = '#cdc8be'; A.fillRect(0, 0, cw, ch);                 // sidewalks / ground
+  L.fillStyle = '#000'; L.fillRect(0, 0, cw, ch);
+  S.clearRect(0, 0, cw, ch);
+  A.setTransform(s, 0, 0, s, 0, 0); L.setTransform(s, 0, 0, s, 0, 0); S.setTransform(s, 0, 0, s, 0, 0);
+  const sAt = (x, y) => Fd ? sampleArr(Fd.s, x, y) : 999;
+  const CLEAR = EDGE + 6;
+
+  // ---- roads ----
+  A.fillStyle = '#b9b2a6';
+  for (let i = 0; i < C.vx.length; i++) A.fillRect(C.vx[i] - C.vw[i] / 2 - 1, -20, C.vw[i] + 2, H + 40);
+  for (let j = 0; j < C.hy.length; j++) A.fillRect(-20, C.hy[j] - C.hw[j] / 2 - 1, W + 40, C.hw[j] + 2);
+  A.fillStyle = '#5d636b';
+  for (let i = 0; i < C.vx.length; i++) A.fillRect(C.vx[i] - C.vw[i] / 2, -20, C.vw[i], H + 40);
+  for (let j = 0; j < C.hy.length; j++) A.fillRect(-20, C.hy[j] - C.hw[j] / 2, W + 40, C.hw[j]);
+  // manholes
+  A.fillStyle = '#535960';
+  for (const [x, y] of C.manholes) { A.beginPath(); A.arc(x, y, 2.6, 0, 7); A.fill(); }
+  // markings per segment: centre dashes (minor) or a double line (major), crosswalks and stop lines at each end
+  const seg = (ax, ln, k) => {
+    const cr = ax === 0 ? C.vx : C.hy, cwid = ax === 0 ? C.vw : C.hw;
+    const rc = ax === 0 ? C.hy[ln] : C.vx[ln], rw = ax === 0 ? C.hw[ln] : C.vw[ln];
+    const a = cr[k] + cwid[k] / 2, b = cr[k + 1] - cwid[k + 1] / 2;
+    if (b - a < 24) return;
+    const rect = (t0, t1, l0, l1) => ax === 0 ? A.fillRect(t0, l0, t1 - t0, l1 - l0) : A.fillRect(l0, t0, l1 - l0, t1 - t0);
+    // crosswalks: zebra stripes running along the road, 7px deep, 2px gaps
+    A.fillStyle = 'rgba(244,241,232,0.82)';
+    for (const [c0, dir] of [[a, 1], [b, -1]]) {
+      const t0 = c0 + dir * 2, t1 = c0 + dir * 9;
+      for (let l = rc - rw / 2 + 2; l + 2 <= rc + rw / 2 - 1.5; l += 4) rect(Math.min(t0, t1), Math.max(t0, t1), l, l + 2.2);
+    }
+    // stop lines on the approaching lane (right-hand traffic)
+    A.fillStyle = 'rgba(244,241,232,0.75)';
+    // at end b, cars heading +dir approach: right side lateral = +1 for ax 0, -1 for ax 1
+    const rs = ax === 0 ? 1 : -1;
+    rect(b - 11.5, b - 10.2, rs > 0 ? rc + 1 : rc - rw / 2 + 1.5, rs > 0 ? rc + rw / 2 - 1.5 : rc - 1);
+    rect(a + 10.2, a + 11.5, rs > 0 ? rc - rw / 2 + 1.5 : rc + 1, rs > 0 ? rc - 1 : rc + rw / 2 - 1.5);
+    const m0 = a + 14, m1 = b - 14;
+    if (rw >= 30) {
+      A.fillStyle = 'rgba(232,196,106,0.80)';
+      rect(m0, m1, rc - 1.6, rc - 0.6); rect(m0, m1, rc + 0.6, rc + 1.6);
+    } else {
+      A.fillStyle = 'rgba(244,241,232,0.62)';
+      const n = Math.max(1, Math.floor((m1 - m0 + 6) / 14));
+      const st = (m1 - m0 - (n * 14 - 6)) / 2 + m0;
+      for (let q = 0; q < n; q++) rect(st + q * 14, st + q * 14 + 8, rc - 0.7, rc + 0.7);
+    }
+  };
+  for (let j = 0; j < C.hy.length; j++) for (let k = 0; k + 1 < C.vx.length; k++) seg(0, j, k);
+  for (let i = 0; i < C.vx.length; i++) for (let k = 0; k + 1 < C.hy.length; k++) seg(1, i, k);
+
+  // ---- blocks ----
+  const casters = [];
+  const winList = [];
+  const plazas = [];
+  for (const blk of C.blocks) {
+    const lot = blk.lot;
+    if (lot.x > W + 40 || lot.y > H + 40 || lot.x + lot.w < -40 || lot.y + lot.h < -40) continue;
+    const blockS = minS(Fd, blk.x0, blk.y0, blk.x1 - blk.x0, blk.y1 - blk.y0);
+    if (blk.type !== 'build') {
+      if (minS(Fd, lot.x, lot.y, lot.w, lot.h) < CLEAR) { A.fillStyle = plazaPat; A.fillRect(lot.x - 2, lot.y - 2, lot.w + 4, lot.h + 4); continue; }
+      if (blk.type === 'green') drawGreenBlock(A, S, blk);
+      else drawParking(A, S, blk);
+      continue;
+    }
+    // any building touching a park clears that building and turns the whole lot into a plaza
+    let cleared = false;
+    if (blockS < CLEAR + 60) for (const b of blk.bld) { b.cleared = minS(Fd, b.x, b.y, b.w, b.h) < CLEAR; if (b.cleared) cleared = true; }
+    else for (const b of blk.bld) b.cleared = false;
+    if (cleared) plazas.push(blk);
+    A.fillStyle = cleared ? plazaPat : '#c9c3b8';
+    A.fillRect(lot.x - (cleared ? 2 : 0), lot.y - (cleared ? 2 : 0), lot.w + (cleared ? 4 : 0), lot.h + (cleared ? 4 : 0));
+    for (const b of blk.bld) {
+      if (b.cleared) continue;
+      if (b.kind === 'yard') { drawYard(A, S, b); continue; }
+      drawRoof(A, b, casters, winList);
+    }
+  }
+  // ---- cast shadows (shadow canvas: blue = shadow), lowest first; each caster erases its own footprint ----
+  casters.sort((a, b) => a.ht - b.ht);
+  S.fillStyle = '#0000ff';
+  for (const c of casters) {
+    const ox = SHADOW_DIR[0] * c.ht, oy = SHADOW_DIR[1] * c.ht, { x, y, w, h } = c;
+    S.globalCompositeOperation = 'source-over';
+    S.beginPath(); S.moveTo(x, y); S.lineTo(x + w, y); S.lineTo(x + w + ox, y + oy); S.lineTo(x + w + ox, y + h + oy); S.lineTo(x + ox, y + h + oy); S.lineTo(x, y + h); S.closePath(); S.fill();
+    S.globalCompositeOperation = 'destination-out';
+    S.fillRect(x, y, w, h);
+  }
+  S.globalCompositeOperation = 'source-over';
+  // ---- small trees scattered over the plazas around the parks ----
+  const trees = C.trees.filter(([x, y, r]) => sAt(x, y) > EDGE + r + 4);
+  for (const blk of plazas) {
+    const R = mulberry32(blk.seed ^ 0x7f4a7c15), { x, y, w, h } = blk.lot;
+    for (let gy = y + 6; gy < y + h - 6; gy += 21) for (let gx = x + 6; gx < x + w - 6; gx += 21) {
+      const tx = gx + R() * 10, ty = gy + R() * 10, r = 3.6 + R() * 2.8;
+      if (R() < 0.22 || tx > x + w - r - 2 || ty > y + h - r - 2) continue;
+      if (sAt(tx, ty) < EDGE + r + 7) continue;
+      if (blk.bld.some(b => !b.cleared && tx > b.x - r - 2 && tx < b.x + b.w + r + 2 && ty > b.y - r - 2 && ty < b.y + b.h + r + 2)) continue;
+      trees.push([tx, ty, r, R()]);
+    }
+  }
+  // ---- street / plaza trees (above roofs' edges and the road) ----
+  for (const [x, y, r] of trees) { S.beginPath(); S.arc(x + 2.6, y + 3.4, r, 0, 7); S.fill(); }
+  for (const [x, y, r, hu] of trees) drawTree(A, x, y, r, hu);
+  // ---- lamps: a small post in the albedo, a soft pool of light in the lights canvas (green) ----
+  const lamps = C.lamps.filter(([x, y]) => x > -40 && y > -40 && x < W + 40 && y < H + 40 && sAt(x, y) > EDGE + 6);
+  A.fillStyle = '#41464d';
+  for (const [x, y] of lamps) { A.beginPath(); A.arc(x, y, 1.5, 0, 7); A.fill(); }
+  // ---- lights canvas: window ranks (red), lamp glow (green, additive), shadows (blue, additive) ----
+  L.setTransform(1, 0, 0, 1, 0, 0);
+  for (const w of winList) { L.fillStyle = `rgb(${w[4]},0,0)`; L.fillRect(w[0], w[1], w[2], w[3]); }
+  L.setTransform(s, 0, 0, s, 0, 0);
+  L.globalCompositeOperation = 'lighter';
+  const GR = 30;
+  for (const [x, y] of lamps) {
+    const g = L.createRadialGradient(x, y, 0, x, y, GR);
+    g.addColorStop(0, 'rgba(0,255,0,0.95)'); g.addColorStop(0.18, 'rgba(0,255,0,0.55)'); g.addColorStop(0.55, 'rgba(0,255,0,0.16)'); g.addColorStop(1, 'rgba(0,255,0,0)');
+    L.fillStyle = g; L.fillRect(x - GR, y - GR, GR * 2, GR * 2);
+  }
+  L.setTransform(1, 0, 0, 1, 0, 0);
+  L.drawImage(shCv, 0, 0);
+  L.globalCompositeOperation = 'source-over';
+  // ---- upload ----
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+  gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+  gl.bindTexture(gl.TEXTURE_2D, cityTex[idx]);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, albCv);
+  gl.bindTexture(gl.TEXTURE_2D, lightTex[idx]);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, litCv);
+  cacheMs = performance.now() - t0;
+}
+
+function drawTree(A, x, y, r, hu) {
+  const base = hu < 0.33 ? [52, 104, 56] : hu < 0.66 ? [70, 122, 58] : [46, 92, 66];
+  A.fillStyle = rgb(base, 0.92); A.beginPath(); A.arc(x, y, r, 0, 7); A.fill();
+  A.save(); A.beginPath(); A.arc(x, y, r, 0, 7); A.clip();
+  A.fillStyle = rgb(base, 1.3, 5); A.beginPath(); A.arc(x - r * 0.24, y - r * 0.3, r * 0.7, 0, 7); A.fill();
+  A.restore();
+}
+// Small pocket park block (static)
+function drawGreenBlock(A, S, blk) {
+  const R = mulberry32(blk.seed), { x, y, w, h } = blk.lot;
+  A.fillStyle = '#d9d1c1'; A.fillRect(x - 2, y - 2, w + 4, h + 4);
+  A.fillStyle = '#5e8a4e'; roundRect(A, x + 3, y + 3, w - 6, h - 6, 6); A.fill();
+  A.fillStyle = '#c9bd9f';
+  A.fillRect(x + w / 2 - 2.5, y + 3, 5, h - 6); A.fillRect(x + 3, y + h / 2 - 2.5, w - 6, 5);
+  A.beginPath(); A.arc(x + w / 2, y + h / 2, 11, 0, 7); A.fill();
+  A.fillStyle = '#8fb9c9'; A.beginPath(); A.arc(x + w / 2, y + h / 2, 6.5, 0, 7); A.fill();
+  A.fillStyle = '#b6d6e0'; A.beginPath(); A.arc(x + w / 2 - 1.5, y + h / 2 - 1.5, 3, 0, 7); A.fill();
+  const tr = [];
+  for (let k = 0; k < 40 && tr.length < 10; k++) {
+    const tx = x + 10 + R() * (w - 20), ty = y + 10 + R() * (h - 20), r = 6 + R() * 5;
+    if (Math.abs(tx - x - w / 2) < r + 4 || Math.abs(ty - y - h / 2) < r + 4) continue;
+    if (tr.some(t => Math.hypot(t[0] - tx, t[1] - ty) < t[2] + r)) continue;
+    tr.push([tx, ty, r, R()]);
+  }
+  S.fillStyle = '#0000ff';
+  for (const [tx, ty, r] of tr) { S.beginPath(); S.arc(tx + 3, ty + 4, r, 0, 7); S.fill(); }
+  for (const t of tr) drawTree(A, ...t);
+}
+function drawParking(A, S, blk) {
+  const R = mulberry32(blk.seed), { x, y, w, h } = blk.lot;
+  A.fillStyle = '#6c727a'; A.fillRect(x, y, w, h);
+  A.fillStyle = 'rgba(240,238,230,0.75)';
+  const rows = Math.max(1, Math.floor((h - 8) / 44));
+  for (let r = 0; r < rows; r++) {
+    const ry = y + 6 + r * 44;
+    for (let cx = x + 6; cx + 10 < x + w - 4; cx += 11) {
+      A.fillRect(cx, ry, 0.9, 16); A.fillRect(cx, ry + 22, 0.9, 16);
+      if (R() < 0.55) {
+        for (const [oy, flip] of [[ry + 2, 1], [ry + 24, -1]]) {
+          if (R() < 0.4) continue;
+          const c = hexRGB(CAR_COLS[Math.floor(R() * CAR_COLS.length)]);
+          S.fillStyle = '#0000ff'; roundRect(S, cx + 2.2, oy + 1.5, 7, 13, 2.2); S.fill();
+          A.fillStyle = rgb(c, 0.75); roundRect(A, cx + 1.5, oy, 7.5, 13.5, 2.4); A.fill();
+          A.fillStyle = rgb(c); roundRect(A, cx + 2, oy + 0.5, 6.5, 12.5, 2.2); A.fill();
+          A.fillStyle = '#2b3542'; A.fillRect(cx + 2.6, flip > 0 ? oy + 2.2 : oy + 8.4, 5.3, 2.8);
+          A.fillStyle = 'rgba(240,238,230,0.75)';
+        }
+      }
+    }
+  }
+}
+function drawYard(A, S, b) {
+  const R = mulberry32(b.seed);
+  A.fillStyle = '#bfb6a6'; A.fillRect(b.x, b.y, b.w, b.h);
+  if (b.w > 22 && b.h > 22) {
+    A.fillStyle = '#6a9356'; roundRect(A, b.x + 4, b.y + 4, b.w - 8, b.h - 8, 4); A.fill();
+    const r = Math.min(b.w, b.h) * 0.22 + R() * 3;
+    S.fillStyle = '#0000ff'; S.beginPath(); S.arc(b.x + b.w / 2 + 3, b.y + b.h / 2 + 4, r, 0, 7); S.fill();
+    drawTree(A, b.x + b.w / 2, b.y + b.h / 2, r, R());
+  }
+}
+function roundRect(ctx, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+// One roof with a parapet, rooftop details and (night) windows. Adds its shadow casters and window rects.
+function drawRoof(A, b, casters, winList) {
+  const R = mulberry32(b.seed), s = cv._scale, c = b.col;
+  const occ = [];
+  const free = (x, y, w, h, m = 2) => !occ.some(o => x < o[0] + o[2] + m && x + w + m > o[0] && y < o[1] + o[3] + m && y + h + m > o[1]);
+  const slab = (x, y, w, h, col, rim = 0.8) => {
+    A.fillStyle = rgb(col, rim); A.fillRect(x, y, w, h);
+    A.fillStyle = rgb(col); A.fillRect(x + 1.5, y + 1.5, w - 3, h - 3);
+    A.fillStyle = 'rgba(30,34,60,0.09)'; A.fillRect(x + 1.5, y + 1.5, w - 3, 1.6); A.fillRect(x + 1.5, y + 3.1, 1.6, h - 4.6);   // parapet shade (sun top left)
+  };
+  slab(b.x, b.y, b.w, b.h, c);
+  casters.push({ x: b.x, y: b.y, w: b.w, h: b.h, ht: b.ht });
+  const ix = b.x + 4, iy = b.y + 4, iw = b.w - 8, ih = b.h - 8;
+  const dshadow = (x, y, w, h, k = 1.4) => { A.fillStyle = 'rgba(25,30,55,0.17)'; A.fillRect(x + k, y + k * 1.3, w, h); };
+  const winAt = (x, y, w, h, day) => {
+    const X = Math.round(x * s), Y = Math.round(y * s), Wd = Math.max(1, Math.round(w * s)), Hd = Math.max(1, Math.round(h * s));
+    A.save(); A.setTransform(1, 0, 0, 1, 0, 0); A.fillStyle = day; A.fillRect(X, Y, Wd, Hd); A.restore();
+    winList.push([X, Y, Wd, Hd, 1 + Math.floor(R() * 254)]);
+  };
+  // upper tier on tall buildings
+  if (b.ht > 14 && b.w > 42 && b.h > 42 && R() < 0.65) {
+    const tw = b.w * (0.45 + R() * 0.25), th = b.h * (0.45 + R() * 0.25);
+    const tx = b.x + 5 + R() * (b.w - tw - 10), ty = b.y + 5 + R() * (b.h - th - 10);
+    const tc = c.map(v => v * 1.04 + 4);
+    const extra = 4 + R() * 6;
+    casters.push({ x: tx, y: ty, w: tw, h: th, ht: b.ht + extra });
+    slab(tx, ty, tw, th, tc, 0.82);
+    occ.push([tx, ty, tw, th]);
+    if (tw > 22 && th > 22 && R() < 0.8) {                                     // a couple of AC units on the tier
+      const n = 1 + Math.floor(R() * 2);
+      for (let q = 0; q < n; q++) { const z = 5 + R() * 2; const ax = tx + 4 + R() * (tw - z - 8), ay = ty + 4 + R() * (th - z - 8); acUnit(A, ax, ay, z, dshadow); }
+    }
+    if (tw > 30 && th > 30 && R() < 0.25) {                                    // helipad
+      const r = Math.min(tw, th) * 0.32, hx = tx + tw / 2, hy = ty + th / 2;
+      A.fillStyle = '#6b7078'; A.beginPath(); A.arc(hx, hy, r, 0, 7); A.fill();
+      A.strokeStyle = '#e3c25d'; A.lineWidth = 1.1; A.beginPath(); A.arc(hx, hy, r - 1.8, 0, 7); A.stroke();
+      A.fillStyle = '#eeeae0'; const k = r * 0.32;
+      A.fillRect(hx - k, hy - k, k * 0.38, k * 2); A.fillRect(hx + k * 0.62, hy - k, k * 0.38, k * 2); A.fillRect(hx - k, hy - k * 0.15, k * 2, k * 0.3);
+    }
+  }
+  // windows: a row just inside the parapet (most buildings) or a skylight grid
+  const wstyle = R();
+  const dayWin = rgb(c, 0.80, -4);
+  if (wstyle < 0.55 && b.w > 20 && b.h > 20) {
+    const sp = 6 + Math.floor(R() * 2), z = 2.4;
+    for (let x = b.x + 5; x + z <= b.x + b.w - 5; x += sp) { if (free(x, b.y + 3.6, z, z, 0.5)) winAt(x, b.y + 3.6, z, z, dayWin); if (free(x, b.y + b.h - 6, z, z, 0.5)) winAt(x, b.y + b.h - 6, z, z, dayWin); }
+    for (let y = b.y + 5 + sp; y + z <= b.y + b.h - 5 - sp * 0.5; y += sp) { if (free(b.x + 3.6, y, z, z, 0.5)) winAt(b.x + 3.6, y, z, z, dayWin); if (free(b.x + b.w - 6, y, z, z, 0.5)) winAt(b.x + b.w - 6, y, z, z, dayWin); }
+    occ.push([b.x, b.y, b.w, 7], [b.x, b.y + b.h - 7, b.w, 7], [b.x, b.y, 7, b.h], [b.x + b.w - 7, b.y, 7, b.h]);
+  } else if (wstyle < 0.75 && iw > 26 && ih > 22) {
+    const cols = Math.floor((iw - 6) / 7), rows = Math.floor((ih - 6) / 7);
+    const nc = Math.max(2, Math.min(cols, 2 + Math.floor(R() * 4))), nr = Math.max(2, Math.min(rows, 2 + Math.floor(R() * 3)));
+    const gx = ix + 3 + R() * Math.max(0, iw - 6 - nc * 7), gy = iy + 3 + R() * Math.max(0, ih - 6 - nr * 7);
+    if (free(gx - 2, gy - 2, nc * 7 + 2, nr * 7 + 2)) {
+      A.fillStyle = rgb(c, 0.9); A.fillRect(gx - 2, gy - 2, nc * 7 + 2, nr * 7 + 2);
+      for (let q = 0; q < nc; q++) for (let r2 = 0; r2 < nr; r2++) winAt(gx + q * 7, gy + r2 * 7, 4, 4, '#7d97ad');
+      occ.push([gx - 2, gy - 2, nc * 7 + 2, nr * 7 + 2]);
+    }
+  }
+  // rooftop details
+  const tryPlace = (w, h, f) => {
+    for (let k = 0; k < 14; k++) {
+      const x = ix + R() * (iw - w), y = iy + R() * (ih - h);
+      if (iw < w || ih < h) return false;
+      if (free(x, y, w, h)) { occ.push([x, y, w, h]); f(x, y); return true; }
+    }
+    return false;
+  };
+  if (R() < 0.55 && iw > 16 && ih > 14) {                                     // stair / lift housing
+    const w = 8 + R() * 6, h = 7 + R() * 5;
+    tryPlace(w, h, (x, y) => { A.fillStyle = 'rgba(25,30,55,0.2)'; A.fillRect(x + 2, y + 2.6, w, h); slab(x, y, w, h, c.map(v => v * 1.05 + 6), 0.8); });
+  }
+  if (R() < 0.3 && iw > 18 && ih > 18) {                                      // water tank
+    const r = 4 + R() * 3;
+    tryPlace(r * 2 + 2, r * 2 + 2, (x, y) => {
+      const cx = x + r + 1, cy = y + r + 1, wood = R() < 0.6;
+      A.fillStyle = 'rgba(25,30,55,0.22)'; A.beginPath(); A.arc(cx + 2.4, cy + 3.1, r, 0, 7); A.fill();
+      A.fillStyle = wood ? '#8c6446' : '#a9b0b8'; A.beginPath(); A.arc(cx, cy, r, 0, 7); A.fill();
+      A.fillStyle = wood ? '#a87b56' : '#c9ced4'; A.beginPath(); A.arc(cx - 0.4, cy - 0.5, r - 1.2, 0, 7); A.fill();
+      A.fillStyle = wood ? '#bf9468' : '#dde1e5'; A.beginPath(); A.arc(cx - 0.8, cy - 1, r * 0.35, 0, 7); A.fill();
+    });
+  }
+  if (R() < 0.18 && b.ht < 12 && iw > 24 && ih > 16) {                         // solar panels
+    const n = 1 + Math.floor(R() * 3);
+    for (let q = 0; q < n; q++) tryPlace(13, 8, (x, y) => {
+      dshadow(x, y, 13, 8, 1.2);
+      A.fillStyle = '#3e5470'; A.fillRect(x, y, 13, 8);
+      A.fillStyle = '#5d7698'; A.fillRect(x + 4.2, y, 0.7, 8); A.fillRect(x + 8.6, y, 0.7, 8); A.fillRect(x, y + 3.7, 13, 0.7);
+    });
+  }
+  if (R() < 0.1 && b.ht < 10 && iw > 28 && ih > 24) {                         // roof garden
+    tryPlace(Math.min(iw, 22 + R() * 14), Math.min(ih, 16 + R() * 10), (x, y) => {
+      const w = occ[occ.length - 1][2], h = occ[occ.length - 1][3];
+      A.fillStyle = '#7da35f'; roundRect(A, x, y, w, h, 3); A.fill();
+      for (let q = 0; q < 4; q++) { A.fillStyle = q % 2 ? '#5d8a46' : '#6c9850'; A.beginPath(); A.arc(x + 4 + R() * (w - 8), y + 4 + R() * (h - 8), 2.4 + R() * 1.6, 0, 7); A.fill(); }
+    });
+  }
+  if (R() < 0.35 && iw > 18 && ih > 12) {                                     // skylights (they glow at night)
+    const n = 1 + Math.floor(R() * 2), w = 7 + R() * 7, h = 4.5 + R() * 3;
+    for (let q = 0; q < n; q++) tryPlace(w, h, (x, y) => {
+      A.fillStyle = '#eeece6'; A.fillRect(x, y, w, h);
+      winAt(x + 1, y + 1, w - 2, h - 2, '#8fb3c8');
+      A.fillStyle = 'rgba(255,255,255,0.35)'; A.fillRect(x + 1, y + 1, (w - 2) * 0.35, h - 2);
+    });
+  }
+  const nAC = Math.floor(R() * Math.min(5, 1 + iw * ih / 500));                // AC units
+  for (let q = 0; q < nAC; q++) { const z = 5 + R() * 3; tryPlace(z, z, (x, y) => acUnit(A, x, y, z, dshadow)); }
+}
+function acUnit(A, x, y, z, dshadow) {
+  dshadow(x, y, z, z, 1.3);
+  A.fillStyle = '#b8bdc3'; A.fillRect(x, y, z, z);
+  A.fillStyle = '#e2e4e7'; A.fillRect(x + 0.6, y + 0.6, z - 1.2, z - 1.2);
+  A.fillStyle = '#8e959d'; A.beginPath(); A.arc(x + z / 2, y + z / 2, z * 0.3, 0, 7); A.fill();
+  A.fillStyle = '#c4c9ce'; A.beginPath(); A.arc(x + z / 2, y + z / 2, z * 0.1, 0, 7); A.fill();
+}
+
+/* ======================================================================
+   Park trees and lamps: CPU places at most one per cell (from the interpolated field), uploaded as a tiny
+   float texture; rebuilt only while the parks morph
+   ====================================================================== */
+let treeTex = null, treeBuf = null, tgW = 0, tgH = 0, treesDirty = true, treeCount = 0;
+function buildParkTrees() {
+  const gw = Math.ceil(W / TCELL) + 3, gh = Math.ceil(H / TCELL) + 3;
+  gl.activeTexture(gl.TEXTURE7);
+  if (!treeTex || gw !== tgW || gh !== tgH) {
+    tgW = gw; tgH = gh;
+    if (treeTex) gl.deleteTexture(treeTex);
+    treeTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, treeTex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, gw, gh);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    treeBuf = new Float32Array(gw * gh * 4);
+  }
+  treeBuf.fill(0); treeCount = 0;
+  if (FB) {
+    const ring = EDGE - 16, sc = P.sigma * C0;
+    for (let cy = -1; cy < gh - 1; cy++) for (let cx = -1; cx < gw - 1; cx++) {
+      const h1 = hash2(cx, cy, 31), h2 = hash2(cx, cy, 32), h3 = hash2(cx, cy, 33), h4 = hash2(cx, cy, 34), h5 = hash2(cx, cy, 35), h6 = hash2(cx, cy, 36);
+      let x = (cx + 0.18 + 0.64 * h1) * TCELL, y = (cy + 0.18 + 0.64 * h2) * TCELL;
+      let s = curS(x, y);
+      if (s > EDGE + 4) continue;
+      const o = ((cy + 1) * gw + (cx + 1)) * 4;
+      // lamp just inside the curb: pull the point onto that contour (one Newton step)
+      if (h3 < 0.30 && Math.abs(s - (ring + 7)) < TCELL * 0.45 && s + sc > 26) {
+        const gx = (curS(x + 2, y) - curS(x - 2, y)) / 4, gy = (curS(x, y + 2) - curS(x, y - 2)) / 4, g2 = gx * gx + gy * gy;
+        if (g2 > 0.05) {
+          const k = (s - (ring + 7)) / g2, nx = x - gx * k, ny = y - gy * k;
+          if (Math.floor(nx / TCELL) === cx && Math.floor(ny / TCELL) === cy) {
+            const s2 = curS(nx, ny);
+            if (Math.abs(s2 - (ring + 7)) < 1.5) { treeBuf[o] = nx; treeBuf[o + 1] = ny; treeBuf[o + 2] = 1; treeBuf[o + 3] = 2; treeCount++; continue; }
+          }
+        }
+      }
+      const r0 = 5.5 + 7.5 * h4;
+      if (h5 > (s > EDGE - 34 ? 0.8 : 0.55)) continue;
+      const m1 = EDGE - (s + r0 * 0.25);                 // inside the lawn (a little overhang is fine)
+      let dr = 1e9;                                            // clear of the footpaths (street centre lines)
+      for (const v of CITY.vx) dr = Math.min(dr, Math.abs(x - v));
+      for (const v of CITY.hy) dr = Math.min(dr, Math.abs(y - v));
+      const m2 = dr - (r0 + 4);
+      const m3 = s + sc - (r0 + 10);                           // clear of the icons
+      const g = sstep(0, 6, Math.min(m1, m2, m3));
+      const r = r0 * g;
+      if (r < 1.5) continue;
+      treeBuf[o] = x; treeBuf[o + 1] = y; treeBuf[o + 2] = r; treeBuf[o + 3] = h6 * 0.999; treeCount++;
+    }
+  }
+  gl.bindTexture(gl.TEXTURE_2D, treeTex);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gw, gh, gl.RGBA, gl.FLOAT, treeBuf);
+  treesDirty = false;
+}
+
+// Footpaths: along each street line, the runs inside the lawn that stay clear of the icons and reach the park edge
+let pathTex = null, pathBuf = null, pathN = 0, pathRows = 0;
+function buildPaths() {
+  const n = Math.ceil(Math.max(W, H) / 4) + 2, rows = CITY.vx.length + CITY.hy.length;
+  if (!pathTex || n !== pathN || rows !== pathRows) {
+    pathN = n; pathRows = rows;
+    if (pathTex) gl.deleteTexture(pathTex);
+    pathTex = makeTex(gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, n, rows, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+    pathBuf = new Uint8Array(n * rows);
+  }
+  pathBuf.fill(0);
+  const sc = P.sigma * C0;
+  const line = (row, fixed, vert, len) => {
+    const m = Math.min(n, Math.ceil(len / 4) + 1), st = new Int8Array(m);   // 0 outside lawn, 1 path ok, 2 too close to icons
+    for (let i = 0; i < m; i++) {
+      const s = vert ? curS(fixed, i * 4) : curS(i * 4, fixed);
+      st[i] = s >= EDGE + 1 ? 0 : s + sc > 26 ? 1 : 2;
+    }
+    for (let i = 0; i < m;) {
+      if (st[i] !== 1) { i++; continue; }
+      let j = i; while (j < m && st[j] === 1) j++;
+      const edgeA = i === 0 || st[i - 1] === 0, edgeB = j === m || st[j] === 0;
+      if ((edgeA || edgeB) && j - i > 5) for (let k = i; k < j; k++) pathBuf[row * n + k] = 255;
+      i = j;
+    }
+  };
+  CITY.vx.forEach((x, k) => line(k, x, true, H));
+  CITY.hy.forEach((y, k) => line(CITY.vx.length + k, y, false, W));
+  gl.bindTexture(gl.TEXTURE_2D, pathTex);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, n, rows, gl.RED, gl.UNSIGNED_BYTE, pathBuf);
+}
+
+/* ======================================================================
+   Traffic: cars on the road graph (right-hand traffic, one lane each way)
+   ====================================================================== */
+const cars = [];
+let simT = 0;
+const crossOf = ax => ax === 0 ? CITY.vx : CITY.hy;
+const crossW = ax => ax === 0 ? CITY.vw : CITY.hw;
+const roadC = (ax, ln) => ax === 0 ? CITY.hy[ln] : CITY.vx[ln];
+const roadW = (ax, ln) => ax === 0 ? CITY.hw[ln] : CITY.vw[ln];
+const headOf = (ax, dir) => ax === 0 ? [dir, 0] : [0, dir];
+function lanePos(ax, ln, dir, t) {
+  const lo = roadW(ax, ln) * 0.25;
+  return ax === 0 ? [t, CITY.hy[ln] + dir * lo] : [CITY.vx[ln] - dir * lo, t];
+}
+function segOpenIn(Fd, ax, ln, k) {
+  const cr = crossOf(ax), cw = crossW(ax), rc = roadC(ax, ln), hw = roadW(ax, ln) / 2 + 2;
+  const a = cr[k] - cw[k] / 2, b = cr[k + 1] + cw[k + 1] / 2;
+  for (let t = a; t <= b + 0.1; t += Math.min(8, (b - a) / 4)) for (const l of [-hw, 0, hw]) {
+    const v = ax === 0 ? sampleArr(Fd.s, t, rc + l) : sampleArr(Fd.s, rc + l, t);
+    if (v < EDGE + 4) return false;
+  }
+  return true;
+}
+function updateRoadsOpen() {
+  if (!CITY || !FB) return;
+  let len = 0;
+  for (const sg of CITY.segs) {
+    const v = (segOpenIn(FA, sg.ax, sg.ln, sg.k) ? 1 : 0) | (segOpenIn(FB, sg.ax, sg.ln, sg.k) ? 2 : 0);
+    CITY.open[sg.ax][sg.ln][sg.k] = v;
+    if (v & 2) len += sg.len;
+  }
+  CITY.openLen = len * 2;
+  for (const c of cars) if (!carOnOpen(c)) c.dying = true;
+}
+function segOpen(ax, ln, k) {
+  const row = CITY.open[ax][ln];
+  if (!row || k < 0 || k >= row.length - 1) return false;
+  return curMix < 1 ? (row[k] & 3) === 3 : (row[k] & 2) === 2;
+}
+function carOnOpen(c) {
+  if (c.mode === 1) { const a = c.after; return segOpenB(a.ax, a.ln, a.dir > 0 ? a.nx - 1 : a.nx); }
+  return segOpenB(c.ax, c.ln, c.dir > 0 ? c.nx - 1 : c.nx);
+}
+const segOpenB = (ax, ln, k) => { const row = CITY.open[ax][ln]; return !!row && k >= 0 && k < row.length - 1 && (row[k] & 2) === 2; };
+// Traffic lights: a 16 s cycle per intersection; 0 green, 1 amber, 2 red for the given approach
+const LCYC = 16;
+function lightFor(ax, ln, nx) {
+  const i = ax === 0 ? nx : ln, j = ax === 0 ? ln : nx;
+  const off = CITY.loff[i] ? CITY.loff[i][j] || 0 : 0;
+  let ph = ((simT + off) % LCYC) / LCYC;
+  if (ax === 1) ph = (ph + 0.5) % 1;
+  return ph < 0.44 ? 0 : ph < 0.5 ? 1 : 2;
+}
+function spawnCar(fade, rnd = Math.random) {
+  const open = CITY.segs.filter(sg => segOpen(sg.ax, sg.ln, sg.k));
+  if (!open.length) return false;
+  let tot = 0; for (const sg of open) tot += sg.len;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    let r = rnd() * tot, sg = open[0];
+    for (const o of open) { r -= o.len; if (r <= 0) { sg = o; break; } }
+    const cr = crossOf(sg.ax), cw = crossW(sg.ax);
+    const a = cr[sg.k] + cw[sg.k] / 2 + 18, b = cr[sg.k + 1] - cw[sg.k + 1] / 2 - 18;
+    if (b - a < 8) continue;
+    const dir = rnd() < 0.5 ? 1 : -1, t = a + rnd() * (b - a);
+    const [x, y] = lanePos(sg.ax, sg.ln, dir, t);
+    if (cars.some(o => Math.hypot(o.x - x, o.y - y) < 28)) continue;
+    const bus = roadW(sg.ax, sg.ln) >= 30 && rnd() < 0.12;
+    const col = hexRGB(bus ? BUS_COLS[Math.floor(rnd() * BUS_COLS.length)] : CAR_COLS[Math.floor(rnd() * CAR_COLS.length)]).map(v => v / 255);
+    const vmax = bus ? 20 + rnd() * 4 : 23 + rnd() * 11;
+    cars.push({ ax: sg.ax, ln: sg.ln, dir, t, nx: dir > 0 ? sg.k + 1 : sg.k, v: vmax * 0.7, vmax, len: bus ? 27 : 13 + rnd() * 3, wid: bus ? 9.5 : 7.2,
+      col, a: fade ? 0 : 1, mode: 0, x, y, hx: 0, hy: 0, stuck: 0, ghost: 0, dying: false });
+    carPose(cars[cars.length - 1]);
+    return true;
+  }
+  return false;
+}
+function bez(P0, P1, P2, P3, u) {
+  const v = 1 - u, a = v * v * v, b = 3 * v * v * u, c = 3 * v * u * u, d = u * u * u;
+  return [a * P0[0] + b * P1[0] + c * P2[0] + d * P3[0], a * P0[1] + b * P1[1] + c * P2[1] + d * P3[1]];
+}
+function bezD(P0, P1, P2, P3, u) {
+  const v = 1 - u;
+  return [3 * v * v * (P1[0] - P0[0]) + 6 * v * u * (P2[0] - P1[0]) + 3 * u * u * (P3[0] - P2[0]),
+          3 * v * v * (P1[1] - P0[1]) + 6 * v * u * (P2[1] - P1[1]) + 3 * u * u * (P3[1] - P2[1])];
+}
+function carPose(c) {
+  if (c.mode === 0) {
+    const p = lanePos(c.ax, c.ln, c.dir, c.t); c.x = p[0]; c.y = p[1];
+    const h = headOf(c.ax, c.dir); c.hx = h[0]; c.hy = h[1];
+  } else {
+    const B = c.bz, p = bez(B[0], B[1], B[2], B[3], c.u), d = bezD(B[0], B[1], B[2], B[3], Math.min(Math.max(c.u, 0.001), 0.999));
+    const l = Math.hypot(d[0], d[1]) || 1;
+    c.x = p[0]; c.y = p[1]; c.hx = d[0] / l; c.hy = d[1] / l;
+  }
+}
+function startTurn(c, P3, after, vmaxTurn, uturn) {
+  const P0 = [c.x, c.y], h = [c.hx, c.hy];
+  let P1, P2;
+  if (uturn) { P1 = [P0[0] + h[0] * 14, P0[1] + h[1] * 14]; P2 = [P3[0] + h[0] * 14, P3[1] + h[1] * 14]; }
+  else {
+    const corner = c.ax === 0 ? [P3[0], P0[1]] : [P0[0], P3[1]];
+    P1 = [P0[0] + (corner[0] - P0[0]) * 0.6, P0[1] + (corner[1] - P0[1]) * 0.6];
+    P2 = [P3[0] + (corner[0] - P3[0]) * 0.6, P3[1] + (corner[1] - P3[1]) * 0.6];
+  }
+  let L = 0, prev = P0;
+  for (let i = 1; i <= 8; i++) { const q = bez(P0, P1, P2, P3, i / 8); L += Math.hypot(q[0] - prev[0], q[1] - prev[1]); prev = q; }
+  c.mode = 1; c.bz = [P0, P1, P2, P3]; c.u = 0; c.bl = Math.max(L, 1); c.after = after; c.turnV = vmaxTurn;
+}
+// At the edge of the next intersection: go straight, turn, or (dead end) turn around
+function route(c) {
+  const opts = [];
+  const kS = c.dir > 0 ? c.nx : c.nx - 1;
+  if (segOpen(c.ax, c.ln, kS)) opts.push({ w: 0.62 });
+  const h = headOf(c.ax, c.dir);
+  for (const d2 of [-1, 1]) {
+    const ax2 = 1 - c.ax, ln2 = c.nx, k2 = d2 > 0 ? c.ln : c.ln - 1;
+    if (!segOpen(ax2, ln2, k2)) continue;
+    const h2 = headOf(ax2, d2), right = (-h[1] === h2[0] && h[0] === h2[1]);
+    opts.push({ d2, right, w: right ? 0.22 : 0.16 });
+  }
+  if (!opts.length) {                                     // dead end: U-turn inside the intersection
+    const P3 = lanePos(c.ax, c.ln, -c.dir, c.t);
+    startTurn(c, P3, { ax: c.ax, ln: c.ln, dir: -c.dir, t: c.t, nx: c.nx - c.dir }, 8, true);
+    return;
+  }
+  let tot = 0; for (const o of opts) tot += o.w;
+  let r = Math.random() * tot, pick = opts[0];
+  for (const o of opts) { r -= o.w; if (r <= 0) { pick = o; break; } }
+  if (pick.d2 === undefined) { c.nx += c.dir; return; }
+  const ax2 = 1 - c.ax, ln2 = c.nx, d2 = pick.d2;
+  const t2 = roadC(c.ax, c.ln) + d2 * (roadW(c.ax, c.ln) / 2 + 1.5);
+  startTurn(c, lanePos(ax2, ln2, d2, t2), { ax: ax2, ln: ln2, dir: d2, t: t2, nx: c.ln + d2 }, pick.right ? 12 : 16, false);
+}
+function stepCars(dt) {
+  simT += dt;
+  if (!CITY) return;
+  const want = P.showCars ? Math.min(160, Math.round(P.traffic * CITY.openLen / 240)) : 0;
+  let alive = 0; for (const c of cars) if (!c.dying) alive++;
+  if (alive < want) { let n = Math.min(want - alive, cars.length ? 3 : want); while (n-- > 0) if (!spawnCar(cars.length > 0 || !firstTraffic)) break; }
+  if (cars.length) firstTraffic = true;
+  if (alive > want) {
+    let n = alive - want;
+    for (let i = cars.length - 1; i >= 0 && n > 0; i--) if (!cars[i].dying) { cars[i].dying = true; n--; }
+  }
+  for (const c of cars) {
+    let vt = c.vmax, waiting = false;
+    if (c.mode === 1) vt = Math.min(vt, c.turnV);
+    if (c.ghost <= 0) for (const o of cars) {
+      if (o === c || o.a < 0.3) continue;
+      const rx = o.x - c.x, ry = o.y - c.y, al = rx * c.hx + ry * c.hy;
+      if (al <= 0 || al > 46) continue;
+      if (Math.abs(rx * c.hy - ry * c.hx) > 5.5) continue;
+      if (o.hx * c.hx + o.hy * c.hy < -0.3) continue;
+      vt = Math.min(vt, Math.max(0, al - (c.len + o.len) / 2 - 4) * 1.8);
+    }
+    if (c.mode === 0) {
+      const cr = crossOf(c.ax), cw = crossW(c.ax);
+      if (c.nx < 0 || c.nx >= cr.length) { c.dying = true; }
+      else {
+        const edge = cr[c.nx] - c.dir * cw[c.nx] / 2;
+        const dist = (edge - c.dir * (11 + c.len / 2) - c.t) * c.dir;
+        const st = lightFor(c.ax, c.ln, c.nx);
+        if ((st === 2 || (st === 1 && dist > 7)) && dist > -1.5) { vt = Math.min(vt, Math.sqrt(2 * 55 * Math.max(0, dist - 0.4))); waiting = true; }
+      }
+    }
+    // never deadlock: a car stuck behind something that is not a red light briefly ignores the others
+    if (c.v < 1.5 && !waiting) { c.stuck += dt; if (c.stuck > 5) { c.ghost = 2.5; c.stuck = 0; } } else c.stuck = 0;
+    if (c.ghost > 0) c.ghost -= dt;
+    c.v += clamp(vt - c.v, -75 * dt, 24 * dt);
+    if (c.v < 0) c.v = 0;
+    const ds = c.v * dt;
+    if (c.mode === 0) {
+      c.t += c.dir * ds;
+      const cr = crossOf(c.ax), cw = crossW(c.ax);
+      if (c.nx >= 0 && c.nx < cr.length && (c.t - (cr[c.nx] - c.dir * (cw[c.nx] / 2 + 2))) * c.dir >= 0) { carPose(c); route(c); }
+    } else {
+      c.u += ds / c.bl;
+      if (c.u >= 1) { const a = c.after; c.mode = 0; c.ax = a.ax; c.ln = a.ln; c.dir = a.dir; c.t = a.t; c.nx = a.nx; }
+    }
+    carPose(c);
+    c.a = c.dying ? c.a - dt * 1.6 : Math.min(1, c.a + dt * 1.4);
+  }
+  for (let i = cars.length - 1; i >= 0; i--) if (cars[i].dying && cars[i].a <= 0) cars.splice(i, 1);
+}
+let firstTraffic = false;
+let carData = new Float32Array(11 * 6 * 4 * 64);
+function quad(arr, o, cx, cy, hx, hy, hl, hw, kind, col, a, sx, sy) {
+  const nx = -hy, ny = hx;
+  const P = [[-hl, -hw], [hl, -hw], [hl, hw], [-hl, -hw], [hl, hw], [-hl, hw]];
+  for (const [lx, ly] of P) {
+    arr[o++] = cx + hx * lx + nx * ly; arr[o++] = cy + hy * lx + ny * ly;
+    arr[o++] = lx; arr[o++] = ly;
+    arr[o++] = col[0]; arr[o++] = col[1]; arr[o++] = col[2]; arr[o++] = a;
+    arr[o++] = kind; arr[o++] = sx; arr[o++] = sy;
+  }
+  return o;
+}
+function buildCarVerts(beams) {
+  const vis = cars.filter(c => c.a > 0.01 && c.x > -40 && c.y > -40 && c.x < W + 40 && c.y < H + 40);
+  const need = vis.length * (beams ? 3 : 2) * 6 * 11;
+  if (carData.length < need) carData = new Float32Array(need * 2);
+  let o = 0;
+  const NONE = [0, 0, 0];
+  for (const c of vis) o = quad(carData, o, c.x + 1.8, c.y + 2.4, c.hx, c.hy, c.len / 2 + 2.5, c.wid / 2 + 2.5, 0, NONE, c.a, c.len + 0.6, c.wid + 0.6);
+  for (const c of vis) o = quad(carData, o, c.x, c.y, c.hx, c.hy, c.len / 2 + 1.5, c.wid / 2 + 1.5, 1, c.col, c.a, c.len, c.wid);
+  if (beams) for (const c of vis) {
+    const bl = 30, bw = 16;
+    o = quad(carData, o, c.x + c.hx * (c.len / 2 + bl / 2 - 1), c.y + c.hy * (c.len / 2 + bl / 2 - 1), c.hx, c.hy, bl / 2, bw / 2, 2, NONE, c.a, bl, bw);
+  }
+  return o / 11;
+}
+
+/* ======================================================================
+   Time of day: Auto follows the local clock; the grade eases between states
+   ====================================================================== */
+const LIGHT = { night: 0, dusk: 0, init: false };
+function targetLight() {
+  const m = P.timeMode;
+  if (m === 1) return [0, 0];
+  if (m === 2) return [0.22, 1];
+  if (m === 3) return [1, 0];
+  const d = new Date(), h = d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600;
+  const night = clamp(1 - sstep(5.0, 6.6, h) + sstep(18.7, 20.4, h), 0, 1);
+  const bump = (c, w) => 1 - sstep(0, w, Math.abs(h - c));
+  const dusk = Math.max(0.75 * bump(6.1, 1.5), bump(18.4, 1.9));
+  return [night, dusk];
+}
+function stepLight(dt) {
+  const [n, d] = targetLight();
+  if (!LIGHT.init) { LIGHT.night = n; LIGHT.dusk = d; LIGHT.init = true; return; }
+  const k = Math.min(1, dt * 1.8);
+  LIGHT.night += (n - LIGHT.night) * k; LIGHT.dusk += (d - LIGHT.dusk) * k;
+}
+function grade() {
+  const n = LIGHT.night, d = LIGHT.dusk * (1 - n * 0.7);
+  const DAY = [1.0, 0.99, 0.965], DUSK = [1.02, 0.80, 0.63], NIGHT = [0.215, 0.25, 0.39];
+  const tint = [0, 1, 2].map(i => (DAY[i] + (DUSK[i] - DAY[i]) * d) * (1 - n) + NIGHT[i] * n);
+  return {
+    tint, dusk: d * (1 - n),
+    shStr: (0.88 + 0.07 * d) * (1 - n) + 0.30 * n,
+    lampK: 1.35 * n + 0.32 * d * (1 - n),
+    win: P.windows * clamp(n + 0.4 * d * (1 - n), 0, 1),
+    beams: clamp(Math.max(n, d * 0.55), 0, 1),
+  };
+}
+
+/* ======================================================================
+   Desktop icons (DOM)
+   ====================================================================== */
+const desktop = document.getElementById('desktop');
+let icons = [], layoutKind = 'mine', selected = null, drag = null, extraIdx = 0, layoutCapacity = 0;
+const grid = { cols: 1, rows: 1 };
+let DW = innerWidth, DH = innerHeight - TASKBAR;
+function computeGrid() {
+  DW = innerWidth; DH = innerHeight - TASKBAR;
+  grid.cols = Math.max(1, Math.floor((DW - GRID_X0) / CELL_W));
+  grid.rows = Math.max(1, Math.floor((DH - GRID_Y0) / CELL_H));
+}
+const cellPos = (c, r) => ({ x: GRID_X0 + c * CELL_W, y: GRID_Y0 + r * CELL_H });
+const occupied = (x, y, self) => icons.some(ic => ic !== self && Math.abs(ic.x - x) < CELL_W / 2 && Math.abs(ic.y - y) < CELL_H / 2);
+function nearestFreeCell(cx, cy, self) {
+  let best = null, bd = Infinity;
+  for (let c = 0; c < grid.cols; c++) for (let r = 0; r < grid.rows; r++) {
+    const pos = cellPos(c, r);
+    if (occupied(pos.x, pos.y, self)) continue;
+    const dd = Math.hypot(pos.x + CELL_W / 2 - cx, pos.y + CELL_H / 2 - cy);
+    if (dd < bd) { bd = dd; best = pos; }
+  }
+  return best;
+}
+function addIcon([name, type], pos, born = false) {
+  const el = document.createElement('div');
+  el.className = 'icon' + (born ? ' born' : '');
+  el.innerHTML = `<div class="glyph"><svg viewBox="0 0 48 48">${glyphOf(name, type)}</svg></div><div class="label"></div>`;
+  el.querySelector('.label').textContent = name;
+  el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px';
+  desktop.appendChild(el);
+  const ic = { name, type, x: pos.x, y: pos.y, w: el.offsetWidth, h: el.offsetHeight, el };
+  icons.push(ic); bindDrag(ic);
+  return ic;
+}
+function setPos(ic, x, y) { ic.x = x; ic.y = y; ic.el.style.left = x + 'px'; ic.el.style.top = y + 'px'; }
+function select(ic) {
+  if (selected) selected.el.classList.remove('sel');
+  selected = ic;
+  if (ic) ic.el.classList.add('sel');
+}
+function bindDrag(ic) {
+  const el = ic.el;
+  el.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.stopPropagation(); select(ic);
+    el.setPointerCapture(e.pointerId); el.classList.remove('settle');
+    drag = { ic, sx: e.clientX, sy: e.clientY, ox: ic.x, oy: ic.y, moved: false };
+  });
+  el.addEventListener('pointermove', e => {
+    if (!drag || drag.ic !== ic) return;
+    const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true; el.classList.add('drag');
+    el.style.left = drag.ox + dx + 'px'; el.style.top = drag.oy + dy + 'px';
+  });
+  const end = (e, cancel) => {
+    if (!drag || drag.ic !== ic) return;
+    const d = drag; drag = null;
+    el.classList.remove('drag');
+    if (!d.moved) return;
+    let nx = cancel ? d.ox : d.ox + (e.clientX - d.sx), ny = cancel ? d.oy : d.oy + (e.clientY - d.sy);
+    nx = Math.min(Math.max(nx, 0), DW - ic.w); ny = Math.min(Math.max(ny, 0), DH - ic.h);
+    if (P.snap && !cancel) { const c = nearestFreeCell(nx + ic.w / 2, ny + ic.h / 2, ic); if (c) { nx = c.x; ny = c.y; } }
+    if (Math.hypot(nx - d.ox, ny - d.oy) < 0.5) { setPos(ic, nx, ny); return; }
+    el.classList.add('settle'); setPos(ic, nx, ny);
+    commit();
+  };
+  el.addEventListener('pointerup', e => end(e, false));
+  el.addEventListener('pointercancel', e => end(e, true));
+}
+function applyLayout(kind) {
+  layoutKind = kind;
+  icons.forEach(ic => ic.el.remove()); icons = []; selected = null; extraIdx = 0;
+  computeGrid();
+  layoutCapacity = grid.cols * grid.rows;
+  if (kind === 'mine') {
+    for (const [c, r, name, type] of mineCells()) {
+      const pos = cellPos(Math.round(c * (grid.cols - 1) / 21), Math.round(r * (grid.rows - 1) / 9));
+      if (!occupied(pos.x, pos.y, null)) addIcon([name, type], pos);
+    }
+  } else if (kind === 'arranged') {
+    FILES.forEach((f, i) => { const c = Math.floor(i / grid.rows), r = i % grid.rows; if (c < grid.cols) addIcon(f, cellPos(c, r)); });
+  } else if (kind === 'messy') {
+    const rnd = mulberry32(20260928);
+    for (const f of FILES) for (let t = 0; t < 300; t++) {
+      const c = rnd() < 0.45 ? Math.floor(rnd() * Math.min(3, grid.cols)) : Math.floor(rnd() * grid.cols);
+      const pos = cellPos(c, Math.floor(rnd() * grid.rows));
+      if (!occupied(pos.x, pos.y, null)) { addIcon(f, pos); break; }
+    }
+  } else {
+    Array.from({ length: 10 }, (_, r) => [[0, r], [1, r]]).flat().concat([[2, 0], [2, 1], [2, 2], [3, 0], [3, 1], [3, 2], [Math.floor(grid.cols * 0.45), Math.floor(grid.rows * 0.5)]])
+      .forEach(([c, r], i) => addIcon(FILES[i], cellPos(Math.min(c, grid.cols - 1), Math.min(r, grid.rows - 1))));
+  }
+  commit(true);
+}
+
+/* ======================================================================
+   Size / main loop
+   ====================================================================== */
+function resize() {
+  W = innerWidth; H = innerHeight;
+  const scale = PREVIEW ? 0.45 : Math.min(devicePixelRatio || 1, P.quality);
+  const box = cv.getBoundingClientRect();
+  cv.width = Math.round((box.width || W) * scale); cv.height = Math.round((box.height || H) * scale); cv._scale = scale;
+  Gw = Math.ceil(W / STEP) + 2; Gh = Math.ceil(H / STEP) + 2;
+  buildNoise();
+  allocField();
+  genCity();
+  cacheOK = false;
+}
+
+const T0 = performance.now();
+let lastT = 0, fpsEMA = 0, frameN = 0, frameMs = 0;
+const px = new Uint8Array(4);
+let paused = false;                              // host: a maximised / fullscreen window covers the desktop
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (paused) { lastT = 0; return; }
+  if (P.cap30 && now - lastT < 31) return;
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.03;
+  if (lastT) fpsEMA = fpsEMA ? fpsEMA * 0.9 + (1 / dt) * 0.1 : 1 / dt;
+  lastT = now;
+  const e = Math.min((now - morphT0) / morphDur, 1);
+  const was = curMix;
+  curMix = e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2;
+  if (curMix < 1 || was < 1) treesDirty = true;
+  stepLight(dt);
+  stepCars(dt);
+  draw(now);
+  if (++frameN % 10 === 0) updateStats();
+}
+function draw(now) {
+  const measure = frameN % 20 === 0, t0 = performance.now();
+  if (!FB) return;
+  if (!cacheOK || albCv.width !== cv.width || albCv.height !== cv.height) {
+    renderCity(fromI, FA);
+    if (toI !== fromI) renderCity(toI, FB);
+    cacheOK = true;
+  }
+  if (treesDirty || !treeTex) { buildParkTrees(); buildPaths(); }
+  const G = grade();
+  const { p, U } = PR;
+  gl.bindVertexArray(emptyVAO);
+  gl.disable(gl.BLEND);
+  gl.useProgram(p);
+  gl.viewport(0, 0, cv.width, cv.height);
+  const bind = (unit, tex, u) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(u, unit); };
+  bind(0, noiseTex, U.uNoise); bind(1, ftex[fromI], U.uFA); bind(2, ftex[toI], U.uFB);
+  bind(3, cityTex[fromI], U.uCA); bind(4, cityTex[toI], U.uCB); bind(5, lightTex[fromI], U.uLA); bind(6, lightTex[toI], U.uLB);
+  bind(7, treeTex, U.uTrees); bind(8, pathTex, U.uPath);
+  gl.uniform1f(U.uPathN, pathN);
+  gl.uniform2f(U.uRes, cv.width / cv._scale, cv.height / cv._scale);
+  gl.uniform2f(U.uPx, cv.width, cv.height);
+  gl.uniform2f(U.uGrid, Gw, Gh);
+  gl.uniform2i(U.uTGrid, tgW, tgH);
+  gl.uniform1f(U.uScale, cv._scale);
+  gl.uniform1f(U.uSeed, (seed % 997) * 0.37);
+  gl.uniform1f(U.uStep, STEP);
+  gl.uniform1f(U.uMix, curMix);
+  gl.uniform1f(U.uCMix, sstep(0.15, 0.85, curMix));
+  gl.uniform1f(U.uTime, (now - T0) / 1000);
+  gl.uniform1f(U.uDebug, P.debug ? 1 : 0);
+  gl.uniform1f(U.uEdge, EDGE);
+  gl.uniform1f(U.uSigC, P.sigma * C0);
+  gl.uniform1f(U.uRing, ringInset());
+  gl.uniform1f(U.uTCell, TCELL);
+  gl.uniform1f(U.uDusk, G.dusk);
+  gl.uniform1f(U.uWin, G.win);
+  gl.uniform1f(U.uLampK, G.lampK);
+  gl.uniform1f(U.uShStr, G.shStr);
+  gl.uniform3f(U.uTint, ...G.tint);
+  gl.uniform1fv(U.uRV, CITY.rv || (CITY.rv = padArr(CITY.vx)));
+  gl.uniform1fv(U.uRH, CITY.rh || (CITY.rh = padArr(CITY.hy)));
+  gl.uniform1i(U.uNV, Math.min(32, CITY.vx.length));
+  gl.uniform1i(U.uNH, Math.min(32, CITY.hy.length));
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  // cars
+  if (cars.length) {
+    const beams = G.beams > 0.02;
+    const n = buildCarVerts(beams);
+    if (n) {
+      gl.useProgram(CPR.p);
+      gl.bindVertexArray(carVAO);
+      gl.bindBuffer(gl.ARRAY_BUFFER, carBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, carData.subarray(0, n * 11), gl.STREAM_DRAW);
+      gl.uniform2f(CPR.U.uRes, cv.width / cv._scale, cv.height / cv._scale);
+      gl.uniform3f(CPR.U.uTint, ...G.tint);
+      gl.uniform1f(CPR.U.uNight, G.beams);
+      gl.uniform1f(CPR.U.uScale, cv._scale);
+      gl.uniform1f(CPR.U.uShStr, G.shStr);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.drawArrays(gl.TRIANGLES, 0, n);
+      gl.disable(gl.BLEND);
+      gl.bindVertexArray(emptyVAO);
+    }
+  }
+  if (measure) { gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); frameMs = performance.now() - t0; }
+}
+function padArr(a) { const o = new Float32Array(32); for (let i = 0; i < Math.min(32, a.length); i++) o[i] = a[i]; return o; }
+
+/* ======================================================================
+   Panel
+   ====================================================================== */
+const statsEl = document.getElementById('stats');
+const GPU = (() => {
+  if (!gl) return '';
+  const ext = gl.getExtension('WEBGL_debug_renderer_info');
+  const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  return name.replace(/^ANGLE \([^,]+,\s*/, '').replace(/\s*\(0x[0-9a-f]+\).*$/i, '')
+    .replace(/\s*(Direct3D|vs_|OpenGL).*$/, '').replace(/\(R\)|\(TM\)/g, '').trim();
+})();
+function updateStats() {
+  statsEl.innerHTML =
+    `<span class="live">● running · ${fpsEMA.toFixed(0)} fps</span><br>GPU ${GPU}<br>` +
+    `frame ${frameMs.toFixed(1)} ms · field ${fieldMs.toFixed(0)} ms · city ${cacheMs.toFixed(0)} ms<br>` +
+    `canvas ${cv.width}×${cv.height} · icons ${icons.length} · cars ${cars.length}`;
+}
+function syncPanel() {
+  document.querySelectorAll('#segLayout button').forEach(b => b.classList.toggle('on', b.dataset.v === layoutKind));
+  document.querySelectorAll('#segTime button').forEach(b => b.classList.toggle('on', +b.dataset.v === P.timeMode));
+  document.querySelectorAll('.toggles input').forEach(inp => { inp.checked = !!P[inp.dataset.key]; });
+}
+const slidersEl = document.getElementById('sliders');
+for (const s of SLIDERS) {
+  const wrap = document.createElement('div');
+  wrap.className = 'slider';
+  wrap.innerHTML = `<div class="row"><span>${s.label}</span><span></span></div><input type="range" min="${s.min}" max="${s.max}" step="${s.step}" value="${P[s.key]}">`;
+  const out = wrap.querySelector('.row span:last-child'), inp = wrap.querySelector('input');
+  out.textContent = s.fmt(P[s.key]);
+  inp.addEventListener('input', () => {
+    P[s.key] = +inp.value; out.textContent = s.fmt(P[s.key]);
+    if (s.act === 'field') refresh();
+  });
+  slidersEl.appendChild(wrap);
+}
+document.getElementById('segLayout').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  applyLayout(b.dataset.v); syncPanel();
+});
+document.getElementById('segTime').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  P.timeMode = +b.dataset.v; syncPanel();
+});
+document.querySelectorAll('.toggles input').forEach(inp => inp.addEventListener('change', () => {
+  const k = inp.dataset.key;
+  P[k] = DISPLAY_KEYS.includes(k) ? (inp.checked ? 1 : 0) : inp.checked;
+}));
+document.getElementById('collapse').addEventListener('click', () => {
+  const p = document.getElementById('panel');
+  p.classList.toggle('collapsed');
+  document.getElementById('collapse').textContent = p.classList.contains('collapsed') ? '+' : '–';
+});
+// New seed (settings "refresh", panel "New city"). Before the hosted page knows its icons, only keep the seed.
+let iconsSeen = !(WALL || PREVIEW);
+function reseed(v) {
+  seed = v; buildNoise(); genCity();
+  if (!iconsSeen) { if (FB) refresh(); return; }
+  commit(true);
+}
+document.getElementById('btnSeed').addEventListener('click', () => reseed((Math.random() * 1e6) | 0));
+document.getElementById('btnAdd').addEventListener('click', () => {
+  const f = EXTRA[extraIdx++ % EXTRA.length];
+  let pos = null;
+  for (let t = 0; t < 300 && !pos; t++) {
+    const c = cellPos(Math.floor(Math.random() * grid.cols), Math.floor(Math.random() * grid.rows));
+    if (!occupied(c.x, c.y, null)) pos = c;
+  }
+  if (!pos) return;
+  const ic = addIcon(f, pos, true);
+  select(ic);
+  commit();
+});
+desktop.addEventListener('pointerdown', () => select(null));
+addEventListener('keydown', e => {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+    const ic = selected; select(null); ic.el.remove(); icons = icons.filter(x => x !== ic); commit();
+  } else if (e.key === 'h' || e.key === 'H') document.getElementById('panel').classList.toggle('hidden');
+});
+let resizeT = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => {
+    if (WALL || PREVIEW) { resize(); refresh(); return; }
+    resize(); computeGrid();
+    if (grid.cols * grid.rows > layoutCapacity && layoutCapacity < 40) { applyLayout(layoutKind); syncPanel(); return; }
+    for (const ic of icons) setPos(ic, Math.min(ic.x, Math.max(0, DW - ic.w)), Math.min(ic.y, Math.max(0, DH - ic.h)));
+    refresh();
+  }, 100);
+});
+function tickClock() {
+  const d = new Date(), z = n => String(n).padStart(2, '0');
+  document.getElementById('clock').innerHTML = `${z(d.getHours())}:${z(d.getMinutes())}<br>${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+setInterval(tickClock, 15000); tickClock();
+
+/* ---------- start ---------- */
+window.__dbg = {
+  P, applyLayout, cars, commit, sAt: (x, y) => curS(x, y), EDGE, refresh, reseed, applySettings: v => applySettings(v),
+  get icons() { return icons; }, set icons(v) { icons = v; },
+  get light() { return Object.assign({}, LIGHT, grade()); },
+  stats() { return { fieldMs, cacheMs, cars: cars.length, trees: treeCount, curMix }; },
+  bench() {
+    const ts = [];
+    for (let i = 0; i < 10; i++) { const a = performance.now(); draw(performance.now()); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); ts.push(performance.now() - a); }
+    ts.sort((a, b) => a - b);
+    const c0 = performance.now(); renderCity(toI, FB); const cityMs = performance.now() - c0;
+    return { frame: +ts[5].toFixed(1), city: +cityMs.toFixed(1), field: +fieldMs.toFixed(1), canvas: cv.width + 'x' + cv.height, cars: cars.length, gpu: GPU };
+  },
+};
+if (gl) {
+  resize();
+  buildNoiseTex();
+  if (WALL || PREVIEW) startHostedMode();
+  else { applyLayout('mine'); syncPanel(); }
+  requestAnimationFrame(frame);
+}
+
+/* ======================================================================
+   Hosted mode: the page is driven from outside
+   - wallpaper (?wallpaper=1): the desktop host sends messages through WebView2
+   - preview (?preview=1): the settings window (settings.html) posts messages to the iframe
+   Messages: icons (real icon rects, physical px) / settings (partial) / reset (defaults) / pause
+   ====================================================================== */
+// Accept only this theme's slider, switch and option keys
+function applySettings(v) {
+  if (typeof v.seed === 'number' && v.seed !== seed) reseed(v.seed);
+  let field = false, adaptiveChanged = false;
+  for (const k in v) {
+    const sl = SLIDERS.find(s => s.key === k), isDisp = DISPLAY_KEYS.includes(k), isOpt = Object.prototype.hasOwnProperty.call(OPTION_KEYS, k);
+    if (!sl && !isDisp && !isOpt) continue;
+    const val = v[k];
+    if (typeof val !== 'number' || !isFinite(val) || P[k] === val) continue;
+    if (isDisp && val !== 0 && val !== 1) continue;
+    if (isOpt && (!Number.isInteger(val) || val < 0 || val >= OPTION_KEYS[k])) continue;
+    P[k] = sl ? clamp(val, sl.min, sl.max) : val;
+    if (k === 'adaptive') adaptiveChanged = true;
+    if (k === 'sigma') field = true;
+  }
+  if (adaptiveChanged && FB) commit();
+  else if (field && FB) refresh();
+}
+
+function drawGhosts() {
+  const box = document.getElementById('ghosts');
+  box.innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
+}
+
+function startHostedMode() {
+  document.body.classList.add('wall');
+  if (PREVIEW) {
+    document.body.classList.add('preview');
+    const g = document.createElement('div'); g.id = 'ghosts'; document.body.appendChild(g);
+  }
+  icons = [];
+  commit(true);                                   // a plain city until the icon positions arrive
+  let first = true;
+  const handle = m => {
+    if (!m || typeof m !== 'object') return;
+    if (m.t === 'pause') { paused = PREVIEW ? false : !!m.v; return; }
+    if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
+    if (m.t !== 'icons') return;
+    const k = window.devicePixelRatio || 1;       // physical px -> CSS px
+    icons = m.vis && Array.isArray(m.r) ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    if (PREVIEW) drawGhosts();
+    iconsSeen = true;
+    commit(first);                                // first time: parks grow in; later: they follow the icons
+    first = false;
+  };
+  if (PREVIEW) {
+    addEventListener('message', ev => { if (ev.source === parent) { try { handle(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data); } catch (e) {} } });
+    parent.postMessage(JSON.stringify({ t: 'ready' }), '*');
+    return;
+  }
+  const host = window.chrome && window.chrome.webview;
+  if (!host) return;
+  host.addEventListener('message', ev => { try { handle(JSON.parse(ev.data)); } catch (e) {} });
+  host.postMessage('ready');
+}
+</script>
+<script src="share.js"></script>   <!-- share image / share animation (sample icons, names as blocks) -->
+</body>
+</html>
